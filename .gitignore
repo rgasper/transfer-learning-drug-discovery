@@ -1,0 +1,9 @@
+data/
+*.parquet
+*.csv
+*.h5
+*.pt
+__pycache__/
+.venv/
+*.egg-info/
+checkpoints/
