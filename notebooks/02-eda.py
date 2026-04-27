@@ -42,8 +42,7 @@ def _():
         path = DATA_DIR / f"{key}_curated.parquet"
         datasets[key] = pl.read_parquet(path)
         logger.info(f"Loaded {key}: {datasets[key].height} rows")
-
-    return Chem, ENDPOINT_NAMES, MurckoScaffold, datasets, pl, plt
+    return Chem, ENDPOINT_NAMES, MurckoScaffold, datasets, logger, pl, plt
 
 
 @app.cell(hide_code=True)
@@ -78,7 +77,6 @@ def _(ENDPOINT_NAMES, datasets: "dict[str, pl.DataFrame]", mo, pl):
       PAMPA has 483 with permeability ">1000".
         """),
     ])
-
     return
 
 
@@ -106,7 +104,6 @@ def _(ENDPOINT_NAMES, datasets: "dict[str, pl.DataFrame]", mo, pl, plt):
         mo.as_html(fig),
         mo.md("Censored values (e.g., >30 for RLM, >1000 for PAMPA) are excluded from these histograms."),
     ])
-
     return
 
 
@@ -138,7 +135,6 @@ def _(ENDPOINT_NAMES, datasets: "dict[str, pl.DataFrame]", mo, pl, plt):
     - **PAMPA**: heavily skewed toward *permeable* (86% active). Unrelated finetune target.
         """),
     ])
-
     return
 
 
@@ -183,7 +179,6 @@ def _(Chem, MurckoScaffold, datasets: "dict[str, pl.DataFrame]", pl):
         })
 
     overlap_df = pl.DataFrame(_overlap_rows)
-
     return (overlap_df,)
 
 
@@ -202,7 +197,6 @@ def _(mo, overlap_df):
     transfer learning results.
         """),
     ])
-
     return
 
 
@@ -264,7 +258,6 @@ def _(datasets: "dict[str, pl.DataFrame]", mo, pl, plt):
       microsomal stability so we'd expect positive correlation for the compounds that do overlap.
         """),
     ])
-
     return
 
 
@@ -298,6 +291,194 @@ def _(datasets: "dict[str, pl.DataFrame]", mo, pl):
     Since RLM measures metabolic stability and PAMPA measures permeability, low agreement
     is expected — a compound can be metabolically stable but impermeable, or vice versa.
     This confirms that RLM→PAMPA transfer is genuinely "unrelated" from a biological mechanism standpoint.
+        """),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    import numpy as np
+    import pacmap
+    from joblib import Parallel, delayed
+    from rdkit.Chem import rdFingerprintGenerator
+
+    mo.md("## Chemical Space Embedding (PaCMAP)")
+
+    return Parallel, delayed, np, pacmap, rdFingerprintGenerator
+
+
+@app.cell(hide_code=True)
+def _(
+    Chem,
+    Parallel,
+    datasets: "dict[str, pl.DataFrame]",
+    delayed,
+    logger,
+    np,
+    pacmap,
+    pl,
+    rdFingerprintGenerator,
+):
+    # Collect all unique SMILES across all endpoints
+    _all_smiles_frames = []
+    for _key, _df in datasets.items():
+        _all_smiles_frames.append(
+            _df.select("canonical_smiles").unique()
+        )
+    all_smiles_df = pl.concat(_all_smiles_frames).unique()
+    logger.info(f"Total unique molecules across all endpoints: {all_smiles_df.height}")
+
+    def _smiles_to_morgan_fp(smiles: str) -> tuple[str, np.ndarray] | None:
+        """Compute Morgan fingerprint as a numpy array. Returns (smiles, fp) or None."""
+        _mol = Chem.MolFromSmiles(smiles)
+        if _mol is None:
+            return None
+        _gen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
+        _fp = _gen.GetFingerprintAsNumPy(_mol)
+        return (smiles, _fp)
+
+    _smiles_list = all_smiles_df.get_column("canonical_smiles").to_list()
+
+    # Parallel fingerprint generation
+    _results = Parallel(n_jobs=-1, backend="loky")(
+        delayed(_smiles_to_morgan_fp)(smi) for smi in _smiles_list
+    )
+    _valid = [r for r in _results if r is not None]
+    _valid_smiles = [r[0] for r in _valid]
+    _fps = [r[1] for r in _valid]
+
+    fp_matrix = np.stack(_fps)
+    logger.info(f"Fingerprint matrix shape: {fp_matrix.shape}")
+
+    # PaCMAP embedding to 2D
+    pacmap_model = pacmap.PaCMAP(n_components=2, n_neighbors=10, MN_ratio=0.5, FP_ratio=2.0, random_state=42)
+    embedding_2d = pacmap_model.fit_transform(fp_matrix.astype(np.float32))
+    logger.info(f"PaCMAP embedding shape: {embedding_2d.shape}")
+
+    # Build a lookup from SMILES -> (x, y) coordinates
+    smiles_to_xy = {smi: (embedding_2d[i, 0], embedding_2d[i, 1]) for i, smi in enumerate(_valid_smiles)}
+
+    return (smiles_to_xy,)
+
+
+@app.cell(hide_code=True)
+def _(
+    ENDPOINT_NAMES,
+    datasets: "dict[str, pl.DataFrame]",
+    mo,
+    np,
+    plt,
+    smiles_to_xy,
+):
+    # Scatter plots: PaCMAP 2D colored by binary label per endpoint
+    _fig_scat, _axes_scat = plt.subplots(1, 3, figsize=(18, 5))
+
+    _label_colors = {1: "#2196F3", 0: "#FF5722", None: "#CCCCCC"}
+    _label_names_map = {
+        "rlm": {1: "Stable", 0: "Unstable"},
+        "hlm": {1: "Stable", 0: "Unstable"},
+        "pampa": {1: "Permeable", 0: "Impermeable"},
+    }
+
+    for _i, (_key, _df) in enumerate(datasets.items()):
+        _smiles = _df.get_column("canonical_smiles").to_list()
+        _labels = _df.get_column("binary_label").to_list()
+
+        _xs, _ys, _cs = [], [], []
+        for _smi, _lab in zip(_smiles, _labels):
+            if _smi in smiles_to_xy:
+                _x, _y = smiles_to_xy[_smi]
+                _xs.append(_x)
+                _ys.append(_y)
+                _cs.append(_label_colors.get(_lab, "#CCCCCC"))
+
+        # Plot inactive first (background), then active on top
+        _xs_arr, _ys_arr, _cs_arr = np.array(_xs), np.array(_ys), np.array(_cs)
+        for _color, _label_val in [("#FF5722", 0), ("#2196F3", 1)]:
+            _mask = _cs_arr == _color
+            if _mask.any():
+                _label_text = _label_names_map[_key][_label_val]
+                _axes_scat[_i].scatter(
+                    _xs_arr[_mask], _ys_arr[_mask],
+                    c=_color, s=4, alpha=0.4, label=_label_text, rasterized=True,
+                )
+
+        _axes_scat[_i].set_title(ENDPOINT_NAMES[_key])
+        _axes_scat[_i].set_xlabel("PaCMAP 1")
+        _axes_scat[_i].set_ylabel("PaCMAP 2")
+        _axes_scat[_i].legend(markerscale=3, fontsize=9)
+
+    _fig_scat.suptitle("Chemical Space (Morgan FP → PaCMAP) Colored by Label", fontsize=14)
+    plt.tight_layout()
+
+    mo.vstack([
+        mo.md("## PaCMAP Embedding — Label Scatter Plots"),
+        mo.as_html(_fig_scat),
+        mo.md("""
+    Each point is a molecule embedded via PaCMAP from 2048-bit Morgan fingerprints (radius 3).
+    Colors indicate the binary classification label for each endpoint. Clustering of same-colored
+    points suggests that chemical structure is predictive of the endpoint — a good sign for ML models.
+        """),
+    ])
+
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    ENDPOINT_NAMES,
+    datasets: "dict[str, pl.DataFrame]",
+    mo,
+    plt,
+    smiles_to_xy,
+):
+    # Hexbin density plots: one column per endpoint, two rows (active / inactive)
+    _fig_hex, _axes_hex = plt.subplots(2, 3, figsize=(18, 10))
+
+    _row_labels = {0: "Inactive", 1: "Active"}
+    _row_colors = {0: "Oranges", 1: "Blues"}
+
+    for _col, (_key, _df) in enumerate(datasets.items()):
+        _smiles = _df.get_column("canonical_smiles").to_list()
+        _labels = _df.get_column("binary_label").to_list()
+
+        for _row, _label_val in enumerate([1, 0]):
+            _xs, _ys = [], []
+            for _smi, _lab in zip(_smiles, _labels):
+                if _lab == _label_val and _smi in smiles_to_xy:
+                    _x, _y = smiles_to_xy[_smi]
+                    _xs.append(_x)
+                    _ys.append(_y)
+
+            _ax = _axes_hex[_row][_col]
+            if len(_xs) > 0:
+                _hb = _ax.hexbin(
+                    _xs, _ys, gridsize=25, cmap=_row_colors[_label_val],
+                    mincnt=1, edgecolors="none",
+                )
+                plt.colorbar(_hb, ax=_ax, label="Count")
+
+            _label_text = {
+                "rlm": {1: "Stable", 0: "Unstable"},
+                "hlm": {1: "Stable", 0: "Unstable"},
+                "pampa": {1: "Permeable", 0: "Impermeable"},
+            }[_key][_label_val]
+
+            _ax.set_title(f"{ENDPOINT_NAMES[_key]} — {_label_text} (n={len(_xs)})")
+            _ax.set_xlabel("PaCMAP 1")
+            _ax.set_ylabel("PaCMAP 2")
+
+    _fig_hex.suptitle("Hexbin Density by Label in PaCMAP Space", fontsize=14, y=1.01)
+    plt.tight_layout()
+
+    mo.vstack([
+        mo.md("## PaCMAP Embedding — Hexbin Density by Label"),
+        mo.as_html(_fig_hex),
+        mo.md("""
+    Top row: active (stable / permeable) compounds. Bottom row: inactive.
+    Density differences between the two rows reveal regions of chemical space
+    enriched for one class — structure-activity relationships that ML models can exploit.
         """),
     ])
 

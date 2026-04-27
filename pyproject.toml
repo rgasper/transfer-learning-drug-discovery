@@ -16,6 +16,7 @@ dependencies = [
     "seaborn>=0.13.0",
     "statsmodels>=0.14.0",
     "typeguard>=4.0.0",
+    "pacmap>=0.7.3",
     "umap-learn>=0.5.7",
     "useful-rdkit-utils>=0.93.0",
     "xgboost>=2.1.0",
