@@ -15,27 +15,21 @@ def _():
     HLM stability and PAMPA permeability. Compare from-scratch training
     vs transfer learning (pre-trained on RLM, continued boosting on target).
 
-    Splitting follows UMAP-based clustering (per Walters' methodology) with
-    5 replicates x 5 folds = 25 train/test splits.
+    Splits are loaded from notebook 02 (PaCMAP-based clustering, 5x5 CV).
     """)
     return (mo,)
 
 
 @app.cell(hide_code=True)
 def _():
+    import json
     from pathlib import Path
 
     import numpy as np
     import polars as pl
     import xgboost as xgb
-    from joblib import Parallel, delayed
     from loguru import logger
-    from rdkit import Chem
-    from rdkit.Chem import rdFingerprintGenerator
     from sklearn.metrics import average_precision_score, roc_auc_score
-    from sklearn.cluster import KMeans
-    from useful_rdkit_utils import GroupKFoldShuffle
-    import umap
 
     DATA_DIR = Path("data")
 
@@ -45,31 +39,20 @@ def _():
         "pampa": "PAMPA pH 7.4",
     }
 
-    # Target endpoints for evaluation (pretrain source is RLM)
     TARGET_ENDPOINTS = ["hlm", "pampa"]
     PRETRAIN_ENDPOINT = "rlm"
 
-    N_REPLICATES = 5
-    N_FOLDS = 5
     return (
-        Chem,
         DATA_DIR,
         ENDPOINT_NAMES,
-        GroupKFoldShuffle,
-        KMeans,
-        N_FOLDS,
-        N_REPLICATES,
         PRETRAIN_ENDPOINT,
-        Parallel,
         TARGET_ENDPOINTS,
         average_precision_score,
-        delayed,
+        json,
         logger,
         np,
         pl,
-        rdFingerprintGenerator,
         roc_auc_score,
-        umap,
         xgb,
     )
 
@@ -77,119 +60,59 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md("""
-    ## Step 1: Load Data and Compute Fingerprints
+    ## Step 1: Load Splits and Fingerprints
+
+    Fingerprints and fold assignments were computed in notebook 02
+    (PaCMAP-based KMeans clustering + GroupKFoldShuffle). Load them here.
     """)
     return
 
 
 @app.cell(hide_code=True)
-def _(
-    Chem,
-    DATA_DIR,
-    ENDPOINT_NAMES,
-    Parallel,
-    delayed,
-    logger,
-    np,
-    pl,
-    rdFingerprintGenerator,
-):
-    # Load curated datasets
-    datasets: dict[str, pl.DataFrame] = {}
-    for key in ENDPOINT_NAMES:
-        datasets[key] = pl.read_parquet(DATA_DIR / f"{key}_curated.parquet")
-        logger.info(f"Loaded {key}: {datasets[key].height} rows")
+def _(DATA_DIR, ENDPOINT_NAMES, json, logger, np):
+    # Load global fingerprint matrix
+    _fp_data = np.load(DATA_DIR / "morgan_fps_2048_r3.npz", allow_pickle=True)
+    _global_fp_matrix = _fp_data["fp_matrix"]
+    _global_smiles = list(_fp_data["smiles"])
+    logger.info(f"Global FP matrix: {_global_fp_matrix.shape}")
 
-    def _compute_fp(smiles: str) -> tuple[str, np.ndarray] | None:
-        """Compute Morgan FP for a single SMILES. Generator created per-call for pickling."""
-        _mol = Chem.MolFromSmiles(smiles)
-        if _mol is None:
-            return None
-        _gen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
-        _fp = _gen.GetFingerprintAsNumPy(_mol)
-        return (smiles, _fp)
+    # Load split config
+    with open(DATA_DIR / "split_config.json") as _f:
+        split_config = json.load(_f)
+    N_REPLICATES = split_config["n_replicates"]
+    N_FOLDS = split_config["n_folds"]
+    logger.info(f"Split config: {N_REPLICATES} replicates x {N_FOLDS} folds")
 
-    # Compute fingerprints for each endpoint
+    # Load per-endpoint splits and build fp_data dict
     fp_data: dict[str, dict] = {}
-    for _key, _df in datasets.items():
-        _smiles_list = _df.get_column("canonical_smiles").to_list()
-        _labels_map = dict(zip(
-            _df.get_column("canonical_smiles").to_list(),
-            _df.get_column("binary_label").to_list(),
-        ))
-        _results = Parallel(n_jobs=-1, backend="loky")(
-            delayed(_compute_fp)(smi) for smi in _smiles_list
+    for _key in ENDPOINT_NAMES:
+        _split = np.load(DATA_DIR / f"{_key}_splits.npz", allow_pickle=True)
+        _smiles = list(_split["smiles"])
+        _labels = _split["labels"]
+        _fp_indices = _split["fp_indices"]
+        _X = _global_fp_matrix[_fp_indices]
+        _folds = _split["folds"]
+        fp_data[_key] = {
+            "X": _X,
+            "y": _labels,
+            "smiles": _smiles,
+            "folds": _folds,
+        }
+        logger.info(
+            f"{_key}: X={_X.shape}, y={_labels.shape}, "
+            f"folds={_folds.shape}, active={(_labels == 1).sum()}, inactive={(_labels == 0).sum()}"
         )
-        _valid = [r for r in _results if r is not None]
-        _X = np.stack([r[1] for r in _valid])
-        _y = np.array([_labels_map[r[0]] for r in _valid], dtype=np.int8)
-        fp_data[_key] = {"X": _X, "y": _y, "smiles": [r[0] for r in _valid]}
-        logger.info(f"{_key}: X={_X.shape}, y={_y.shape}, active={(_y == 1).sum()}, inactive={(_y == 0).sum()}")
-    return (fp_data,)
+
+    return N_FOLDS, N_REPLICATES, fp_data
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md("""
-    ## Step 2: UMAP-Based Clustering Splits
-
-    Following Walters' methodology, we cluster molecules in UMAP space
-    (derived from Morgan fingerprints) and use cluster assignments as
-    groups for `GroupKFoldShuffle`. This produces more realistic train/test
-    splits than random or Murcko scaffold splits.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(
-    KMeans,
-    PRETRAIN_ENDPOINT,
-    TARGET_ENDPOINTS,
-    fp_data: dict[str, dict],
-    logger,
-    np,
-    umap,
-):
-    def compute_umap_cluster_labels(
-        X: np.ndarray,
-        n_clusters: int = 50,
-        random_state: int = 42,
-    ) -> np.ndarray:
-        """Compute UMAP embedding then KMeans cluster assignments.
-
-        Args:
-            X: Fingerprint matrix (n_samples, n_features).
-            n_clusters: Number of KMeans clusters for group splitting.
-            random_state: Seed for reproducibility.
-
-        Returns:
-            Array of cluster labels (n_samples,).
-        """
-        _reducer = umap.UMAP(n_components=2, random_state=random_state, n_jobs=-1)
-        _embedding = _reducer.fit_transform(X.astype(np.float32))
-        _kmeans = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
-        _labels = _kmeans.fit_predict(_embedding)
-        logger.info(f"UMAP+KMeans: {len(set(_labels))} clusters from {X.shape[0]} samples")
-        return _labels
-
-    # Compute cluster labels for each target endpoint
-    cluster_labels: dict[str, np.ndarray] = {}
-    for _key in TARGET_ENDPOINTS:
-        cluster_labels[_key] = compute_umap_cluster_labels(fp_data[_key]["X"])
-
-    # Also compute for RLM (used in pretrain splits if needed)
-    cluster_labels[PRETRAIN_ENDPOINT] = compute_umap_cluster_labels(fp_data[PRETRAIN_ENDPOINT]["X"])
-    return (cluster_labels,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md("""
-    ## Step 3: XGBoost Training
+    ## Step 2: XGBoost Training
 
     For each target endpoint (HLM, PAMPA), train two XGBoost variants across
-    25 folds (5 replicates x 5 folds):
+    25 folds (5 replicates x 5 folds, loaded from notebook 02):
 
     1. **From scratch**: train only on the target endpoint's training fold
     2. **Transfer (RLM pretrain)**: train on full RLM dataset first, then
@@ -304,11 +227,9 @@ def _(
 @app.cell(hide_code=True)
 def _(
     ENDPOINT_NAMES,
-    GroupKFoldShuffle,
     N_FOLDS,
     N_REPLICATES,
     TARGET_ENDPOINTS,
-    cluster_labels: "dict[str, np.ndarray]",
     evaluate_model,
     fp_data: dict[str, dict],
     logger,
@@ -323,17 +244,19 @@ def _(
     for _target_key in TARGET_ENDPOINTS:
         _X = fp_data[_target_key]["X"]
         _y = fp_data[_target_key]["y"]
-        _groups = cluster_labels[_target_key]
+        _folds_matrix = fp_data[_target_key]["folds"]
         _target_name = ENDPOINT_NAMES[_target_key]
 
         logger.info(f"Training on {_target_name} ({_X.shape[0]} samples)")
 
         for _rep in range(N_REPLICATES):
-            _gkf = GroupKFoldShuffle(n_splits=N_FOLDS, shuffle=True, random_state=_rep * 100)
+            _fold_assignments = _folds_matrix[_rep]
 
-            for _fold, (_train_idx, _test_idx) in enumerate(_gkf.split(_X, _y, groups=_groups)):
-                _X_train, _X_test = _X[_train_idx], _X[_test_idx]
-                _y_train, _y_test = _y[_train_idx], _y[_test_idx]
+            for _fold in range(N_FOLDS):
+                _test_mask = _fold_assignments == _fold
+                _train_mask = ~_test_mask
+                _X_train, _X_test = _X[_train_mask], _X[_test_mask]
+                _y_train, _y_test = _y[_train_mask], _y[_test_mask]
 
                 # From scratch
                 _model_scratch = train_xgb_from_scratch(_X_train, _y_train, _X_test, _y_test)
@@ -363,13 +286,14 @@ def _(
 
     results_df = pl.DataFrame(all_results)
     logger.info(f"Total results: {results_df.height} rows")
+
     return (results_df,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md("""
-    ## Step 4: Results Summary
+    ## Step 3: Results Summary
     """)
     return
 
@@ -515,7 +439,6 @@ def _(mo, pl, plt, results_df):
     difference (FWER-controlled at alpha = 0.05).
         """),
     ])
-
     return
 
 
