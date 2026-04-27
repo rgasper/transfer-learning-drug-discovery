@@ -30,21 +30,25 @@ PubChem as bioassay records.
 
 ### Endpoints by category
 
+The sizes below reflect NCATS internal training sets. The publicly deposited
+subsets on PubChem are smaller: RLM ~2,529, HLM ~900, PAMPA ~2,033 curated
+compounds. The full training datasets are not publicly available.
+
 **Metabolic Stability** (rate of enzymatic degradation in liver tissue)
 
-| Endpoint | PubChem AID | ~Training Size | Continuous Value | Classification Cutoff |
-|---|---|---|---|---|
-| RLM Stability (Rat Liver Microsomes) | 1508591 | 35,019 | Half-life (min) | Stable (t1/2 > 30 min) vs Unstable |
-| HLM Stability (Human Liver Microsomes) | 1963597 | 7,000 | Half-life (min) | Stable vs Unstable (same cutoff) |
-| HLC Stability (Human Liver Cytosol) | — | smaller | Half-life | Stable vs Unstable |
+| Endpoint | PubChem AID | ~Internal Training Size | ~Public Size | Continuous Value | Classification Cutoff |
+|---|---|---|---|---|---|
+| RLM Stability (Rat Liver Microsomes) | 1508591 | 35,019 | 2,529 | Half-life (min) | Stable (t1/2 > 30 min) vs Unstable |
+| HLM Stability (Human Liver Microsomes) | 1963597 | 7,000 | 900 | Half-life (min) | Stable vs Unstable (same cutoff) |
+| HLC Stability (Human Liver Cytosol) | — | smaller | — | Half-life | Stable vs Unstable |
 
 **Permeability** (passive diffusion across membranes)
 
-| Endpoint | PubChem AID | ~Training Size | Continuous Value | Classification Cutoff |
-|---|---|---|---|---|
-| PAMPA pH 7.4 (GI tract) | 1508612 | 25,000+ | Permeability (x10^-6 cm/s) | Low (<10) vs Moderate/High (>10) |
-| PAMPA pH 5.0 (GI tract, acidic) | 1645871 | 5,227 | Same | Same |
-| PAMPA-BBB (Blood-Brain Barrier) | 1845228 | 1,958 | Same | Same |
+| Endpoint | PubChem AID | ~Internal Training Size | ~Public Size | Continuous Value | Classification Cutoff |
+|---|---|---|---|---|---|
+| PAMPA pH 7.4 (GI tract) | 1508612 | 25,000+ | 2,033 | Permeability (x10^-6 cm/s) | Low (<10) vs Moderate/High (>10) |
+| PAMPA pH 5.0 (GI tract, acidic) | 1645871 | 5,227 | — | Same | Same |
+| PAMPA-BBB (Blood-Brain Barrier) | 1845228 | 1,958 | — | Same | Same |
 
 **Solubility**
 

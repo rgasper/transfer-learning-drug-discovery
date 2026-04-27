@@ -69,11 +69,10 @@ def _():
         },
     }
     return (
-        PUBCHEM_CSV_BASE,
         Chem,
         DATA_DIR,
         ENDPOINTS,
-        Path,
+        PUBCHEM_CSV_BASE,
         logger,
         pl,
         rdMolStandardize,
@@ -82,22 +81,20 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## Step 1: Download raw CSVs from PubChem
+    mo.md("""
+    ## Step 1: Download raw CSVs from PubChem
 
-        The PubChem PUG REST endpoint
-        `https://pubchem.ncbi.nlm.nih.gov/rest/pug/assay/aid/{AID}/CSV`
-        returns all public data for a bioassay including SMILES. The first few
-        rows are metadata (RESULT_TYPE, RESULT_DESCR, RESULT_UNIT) which we
-        skip during parsing.
-        """
-    )
+    The PubChem PUG REST endpoint
+    `https://pubchem.ncbi.nlm.nih.gov/rest/pug/assay/aid/{AID}/CSV`
+    returns all public data for a bioassay including SMILES. The first few
+    rows are metadata (RESULT_TYPE, RESULT_DESCR, RESULT_UNIT) which we
+    skip during parsing.
+    """)
     return
 
 
 @app.cell
-def _(DATA_DIR, ENDPOINTS, PUBCHEM_CSV_BASE, Path, logger, pl):
+def _(DATA_DIR, ENDPOINTS: dict[str, dict], PUBCHEM_CSV_BASE, logger, pl):
     from urllib.request import urlretrieve
 
     raw_frames: dict[str, pl.DataFrame] = {}
@@ -128,45 +125,41 @@ def _(DATA_DIR, ENDPOINTS, PUBCHEM_CSV_BASE, Path, logger, pl):
         )
 
     raw_frames
-    return endpoint_info, endpoint_key, raw_frames, urlretrieve
+    return (raw_frames,)
 
 
 @app.cell
-def _(mo, raw_frames):
-    mo.md(
-        f"""
-        ## Raw data summary
+def _(mo, raw_frames: "dict[str, pl.DataFrame]"):
+    mo.md(f"""
+    ## Raw data summary
 
-        | Endpoint | Rows | Columns |
-        |---|---|---|
-        | RLM | {raw_frames["rlm"].height} | {raw_frames["rlm"].width} |
-        | HLM | {raw_frames["hlm"].height} | {raw_frames["hlm"].width} |
-        | PAMPA | {raw_frames["pampa"].height} | {raw_frames["pampa"].width} |
+    | Endpoint | Rows | Columns |
+    |---|---|---|
+    | RLM | {raw_frames["rlm"].height} | {raw_frames["rlm"].width} |
+    | HLM | {raw_frames["hlm"].height} | {raw_frames["hlm"].width} |
+    | PAMPA | {raw_frames["pampa"].height} | {raw_frames["pampa"].width} |
 
-        Next: standardize SMILES and extract target values.
-        """
-    )
+    Next: standardize SMILES and extract target values.
+    """)
     return
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## Step 2: SMILES standardization
+    mo.md("""
+    ## Step 2: SMILES standardization
 
-        For each compound we:
-        1. Parse the SMILES with RDKit
-        2. Strip salts and keep the largest fragment
-        3. Canonicalize
-        4. Drop molecules that fail sanitization
-        """
-    )
+    For each compound we:
+    1. Parse the SMILES with RDKit
+    2. Strip salts and keep the largest fragment
+    3. Canonicalize
+    4. Drop molecules that fail sanitization
+    """)
     return
 
 
 @app.cell
-def _(Chem, rdMolStandardize, pl):
+def _(Chem, pl, rdMolStandardize):
     def standardize_smiles(smiles: str) -> str | None:
         """Parse, desalt, and canonicalize a SMILES string.
 
@@ -216,22 +209,20 @@ def _(Chem, rdMolStandardize, pl):
             .unique(subset=["canonical_smiles"], keep="first")
         )
 
-    return standardize_smiles, standardize_smiles_column
+    return (standardize_smiles_column,)
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## Step 3: Extract and clean target values
+    mo.md("""
+    ## Step 3: Extract and clean target values
 
-        Each endpoint has:
-        - A **continuous value** (half-life in minutes or permeability in
-          x10^-6 cm/s) — some entries are censored (e.g., ">30", ">1000").
-          We parse numeric values where possible and flag censored values.
-        - A **binary classification label** derived from the phenotype column.
-        """
-    )
+    Each endpoint has:
+    - A **continuous value** (half-life in minutes or permeability in
+      x10^-6 cm/s) — some entries are censored (e.g., ">30", ">1000").
+      We parse numeric values where possible and flag censored values.
+    - A **binary classification label** derived from the phenotype column.
+    """)
     return
 
 
@@ -297,29 +288,27 @@ def _(pl):
             ),
         )
 
-    return extract_continuous_values, parse_continuous_value, re
+    return (extract_continuous_values,)
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## Step 4: Process each endpoint
+    mo.md("""
+    ## Step 4: Process each endpoint
 
-        Apply SMILES standardization, extract continuous values, and derive
-        binary labels.
-        """
-    )
+    Apply SMILES standardization, extract continuous values, and derive
+    binary labels.
+    """)
     return
 
 
 @app.cell
 def _(
-    ENDPOINTS,
+    ENDPOINTS: dict[str, dict],
     extract_continuous_values,
     logger,
     pl,
-    raw_frames,
+    raw_frames: "dict[str, pl.DataFrame]",
     standardize_smiles_column,
 ):
     SMILES_COL = "PUBCHEM_EXT_DATASOURCE_SMILES"
@@ -376,11 +365,11 @@ def _(
         curated_frames[_endpoint_key] = _df
 
     curated_frames
-    return SMILES_COL, curated_frames
+    return (curated_frames,)
 
 
 @app.cell
-def _(curated_frames, mo, pl):
+def _(curated_frames: "dict[str, pl.DataFrame]", mo, pl):
     _summary_rows = []
     for _key, _df in curated_frames.items():
         _n_total = _df.height
@@ -426,18 +415,16 @@ def _(curated_frames, mo, pl):
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## Step 5: Save curated datasets
+    mo.md("""
+    ## Step 5: Save curated datasets
 
-        Save each endpoint as a parquet file for downstream use.
-        """
-    )
+    Save each endpoint as a parquet file for downstream use.
+    """)
     return
 
 
 @app.cell
-def _(DATA_DIR, curated_frames, logger, mo):
+def _(DATA_DIR, curated_frames: "dict[str, pl.DataFrame]", logger, mo):
     _saved_paths = []
     for _key, _df in curated_frames.items():
         _path = DATA_DIR / f"{_key}_curated.parquet"
@@ -450,17 +437,15 @@ def _(DATA_DIR, curated_frames, logger, mo):
 
 
 @app.cell
-def _(curated_frames, mo):
-    mo.md(
-        """
-        ## Preview: first 10 rows of each endpoint
-        """
-    )
+def _(mo):
+    mo.md("""
+    ## Preview: first 10 rows of each endpoint
+    """)
     return
 
 
 @app.cell
-def _(curated_frames, mo):
+def _(curated_frames: "dict[str, pl.DataFrame]", mo):
     _tabs = {}
     for _key, _df in curated_frames.items():
         _tabs[_key.upper()] = mo.ui.table(_df.head(10))
