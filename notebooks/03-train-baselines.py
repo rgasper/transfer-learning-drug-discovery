@@ -1,0 +1,515 @@
+import marimo
+
+__generated_with = "0.23.3"
+app = marimo.App(width="medium")
+
+
+@app.cell
+def _():
+    import marimo as mo
+
+    mo.md("""
+    # 03 — XGBoost Baseline Training
+
+    Train XGBoost models on Morgan fingerprints (2048-bit, radius 3) for
+    HLM stability and PAMPA permeability. Compare from-scratch training
+    vs transfer learning (pre-trained on RLM, continued boosting on target).
+
+    Splitting follows UMAP-based clustering (per Walters' methodology) with
+    5 replicates x 5 folds = 25 train/test splits.
+    """)
+    return (mo,)
+
+
+@app.cell(hide_code=True)
+def _():
+    from pathlib import Path
+
+    import numpy as np
+    import polars as pl
+    import xgboost as xgb
+    from joblib import Parallel, delayed
+    from loguru import logger
+    from rdkit import Chem
+    from rdkit.Chem import rdFingerprintGenerator
+    from sklearn.metrics import average_precision_score, roc_auc_score
+    from sklearn.cluster import KMeans
+    from useful_rdkit_utils import GroupKFoldShuffle
+    import umap
+
+    DATA_DIR = Path("data")
+
+    ENDPOINT_NAMES = {
+        "rlm": "RLM Stability",
+        "hlm": "HLM Stability",
+        "pampa": "PAMPA pH 7.4",
+    }
+
+    # Target endpoints for evaluation (pretrain source is RLM)
+    TARGET_ENDPOINTS = ["hlm", "pampa"]
+    PRETRAIN_ENDPOINT = "rlm"
+
+    N_REPLICATES = 5
+    N_FOLDS = 5
+
+    return (
+        Chem,
+        DATA_DIR,
+        ENDPOINT_NAMES,
+        GroupKFoldShuffle,
+        KMeans,
+        N_FOLDS,
+        N_REPLICATES,
+        PRETRAIN_ENDPOINT,
+        Parallel,
+        TARGET_ENDPOINTS,
+        average_precision_score,
+        delayed,
+        logger,
+        np,
+        pl,
+        rdFingerprintGenerator,
+        roc_auc_score,
+        umap,
+        xgb,
+    )
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## Step 1: Load Data and Compute Fingerprints
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    Chem,
+    DATA_DIR,
+    ENDPOINT_NAMES,
+    Parallel,
+    delayed,
+    logger,
+    np,
+    pl,
+    rdFingerprintGenerator,
+):
+    # Load curated datasets
+    datasets: dict[str, pl.DataFrame] = {}
+    for key in ENDPOINT_NAMES:
+        datasets[key] = pl.read_parquet(DATA_DIR / f"{key}_curated.parquet")
+        logger.info(f"Loaded {key}: {datasets[key].height} rows")
+
+    def _compute_fp(smiles: str) -> tuple[str, np.ndarray] | None:
+        """Compute Morgan FP for a single SMILES. Generator created per-call for pickling."""
+        _mol = Chem.MolFromSmiles(smiles)
+        if _mol is None:
+            return None
+        _gen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
+        _fp = _gen.GetFingerprintAsNumPy(_mol)
+        return (smiles, _fp)
+
+    # Compute fingerprints for each endpoint
+    fp_data: dict[str, dict] = {}
+    for _key, _df in datasets.items():
+        _smiles_list = _df.get_column("canonical_smiles").to_list()
+        _labels_map = dict(zip(
+            _df.get_column("canonical_smiles").to_list(),
+            _df.get_column("binary_label").to_list(),
+        ))
+        _results = Parallel(n_jobs=-1, backend="loky")(
+            delayed(_compute_fp)(smi) for smi in _smiles_list
+        )
+        _valid = [r for r in _results if r is not None]
+        _X = np.stack([r[1] for r in _valid])
+        _y = np.array([_labels_map[r[0]] for r in _valid], dtype=np.int8)
+        fp_data[_key] = {"X": _X, "y": _y, "smiles": [r[0] for r in _valid]}
+        logger.info(f"{_key}: X={_X.shape}, y={_y.shape}, active={(_y == 1).sum()}, inactive={(_y == 0).sum()}")
+
+    return (fp_data,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## Step 2: UMAP-Based Clustering Splits
+
+    Following Walters' methodology, we cluster molecules in UMAP space
+    (derived from Morgan fingerprints) and use cluster assignments as
+    groups for `GroupKFoldShuffle`. This produces more realistic train/test
+    splits than random or Murcko scaffold splits.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    KMeans,
+    PRETRAIN_ENDPOINT,
+    TARGET_ENDPOINTS,
+    fp_data: dict[str, dict],
+    logger,
+    np,
+    umap,
+):
+    def compute_umap_cluster_labels(
+        X: np.ndarray,
+        n_clusters: int = 50,
+        random_state: int = 42,
+    ) -> np.ndarray:
+        """Compute UMAP embedding then KMeans cluster assignments.
+
+        Args:
+            X: Fingerprint matrix (n_samples, n_features).
+            n_clusters: Number of KMeans clusters for group splitting.
+            random_state: Seed for reproducibility.
+
+        Returns:
+            Array of cluster labels (n_samples,).
+        """
+        _reducer = umap.UMAP(n_components=2, random_state=random_state, n_jobs=-1)
+        _embedding = _reducer.fit_transform(X.astype(np.float32))
+        _kmeans = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
+        _labels = _kmeans.fit_predict(_embedding)
+        logger.info(f"UMAP+KMeans: {len(set(_labels))} clusters from {X.shape[0]} samples")
+        return _labels
+
+    # Compute cluster labels for each target endpoint
+    cluster_labels: dict[str, np.ndarray] = {}
+    for _key in TARGET_ENDPOINTS:
+        cluster_labels[_key] = compute_umap_cluster_labels(fp_data[_key]["X"])
+
+    # Also compute for RLM (used in pretrain splits if needed)
+    cluster_labels[PRETRAIN_ENDPOINT] = compute_umap_cluster_labels(fp_data[PRETRAIN_ENDPOINT]["X"])
+
+    return (cluster_labels,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## Step 3: XGBoost Training
+
+    For each target endpoint (HLM, PAMPA), train two XGBoost variants across
+    25 folds (5 replicates x 5 folds):
+
+    1. **From scratch**: train only on the target endpoint's training fold
+    2. **Transfer (RLM pretrain)**: train on full RLM dataset first, then
+       continue boosting on the target endpoint's training fold
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(average_precision_score, np, roc_auc_score, xgb):
+    XGB_PARAMS = {
+        "objective": "binary:logistic",
+        "eval_metric": "logloss",
+        "max_depth": 6,
+        "learning_rate": 0.1,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "random_state": 42,
+        "verbosity": 0,
+    }
+    N_BOOST_ROUNDS = 200
+    EARLY_STOPPING_ROUNDS = 20
+
+    def train_xgb_from_scratch(
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
+    ) -> xgb.Booster:
+        """Train XGBoost from scratch on a single fold."""
+        _dtrain = xgb.DMatrix(X_train, label=y_train)
+        _dval = xgb.DMatrix(X_val, label=y_val)
+        _model = xgb.train(
+            XGB_PARAMS,
+            _dtrain,
+            num_boost_round=N_BOOST_ROUNDS,
+            evals=[(_dval, "val")],
+            early_stopping_rounds=EARLY_STOPPING_ROUNDS,
+            verbose_eval=False,
+        )
+        return _model
+
+    def train_xgb_transfer(
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
+        pretrained_model: xgb.Booster,
+    ) -> xgb.Booster:
+        """Continue boosting from a pretrained XGBoost model."""
+        _dtrain = xgb.DMatrix(X_train, label=y_train)
+        _dval = xgb.DMatrix(X_val, label=y_val)
+        _model = xgb.train(
+            XGB_PARAMS,
+            _dtrain,
+            num_boost_round=N_BOOST_ROUNDS,
+            evals=[(_dval, "val")],
+            early_stopping_rounds=EARLY_STOPPING_ROUNDS,
+            verbose_eval=False,
+            xgb_model=pretrained_model,
+        )
+        return _model
+
+    def evaluate_model(model: xgb.Booster, X: np.ndarray, y: np.ndarray) -> dict:
+        """Compute classification metrics for an XGBoost model."""
+        _dtest = xgb.DMatrix(X)
+        _y_prob = model.predict(_dtest)
+        _metrics = {}
+        try:
+            _metrics["auc_roc"] = roc_auc_score(y, _y_prob)
+        except ValueError:
+            _metrics["auc_roc"] = float("nan")
+        try:
+            _metrics["avg_precision"] = average_precision_score(y, _y_prob)
+        except ValueError:
+            _metrics["avg_precision"] = float("nan")
+        return _metrics
+
+
+    return (
+        N_BOOST_ROUNDS,
+        XGB_PARAMS,
+        evaluate_model,
+        train_xgb_from_scratch,
+        train_xgb_transfer,
+    )
+
+
+@app.cell(hide_code=True)
+def _(
+    N_BOOST_ROUNDS,
+    PRETRAIN_ENDPOINT,
+    XGB_PARAMS,
+    fp_data: dict[str, dict],
+    logger,
+    xgb,
+):
+    # Pre-train XGBoost on full RLM dataset
+    _X_rlm = fp_data[PRETRAIN_ENDPOINT]["X"]
+    _y_rlm = fp_data[PRETRAIN_ENDPOINT]["y"]
+    _dtrain_rlm = xgb.DMatrix(_X_rlm, label=_y_rlm)
+    rlm_pretrained_model = xgb.train(
+        XGB_PARAMS,
+        _dtrain_rlm,
+        num_boost_round=N_BOOST_ROUNDS,
+        verbose_eval=False,
+    )
+    logger.info(f"RLM pretrained model: {rlm_pretrained_model.num_boosted_rounds()} rounds")
+
+    return (rlm_pretrained_model,)
+
+
+@app.cell(hide_code=True)
+def _(
+    ENDPOINT_NAMES,
+    GroupKFoldShuffle,
+    N_FOLDS,
+    N_REPLICATES,
+    TARGET_ENDPOINTS,
+    cluster_labels: "dict[str, np.ndarray]",
+    evaluate_model,
+    fp_data: dict[str, dict],
+    logger,
+    pl,
+    rlm_pretrained_model,
+    train_xgb_from_scratch,
+    train_xgb_transfer,
+):
+    # Run 5x5-fold CV for each target endpoint
+    all_results: list[dict] = []
+
+    for _target_key in TARGET_ENDPOINTS:
+        _X = fp_data[_target_key]["X"]
+        _y = fp_data[_target_key]["y"]
+        _groups = cluster_labels[_target_key]
+        _target_name = ENDPOINT_NAMES[_target_key]
+
+        logger.info(f"Training on {_target_name} ({_X.shape[0]} samples)")
+
+        for _rep in range(N_REPLICATES):
+            _gkf = GroupKFoldShuffle(n_splits=N_FOLDS, shuffle=True, random_state=_rep * 100)
+
+            for _fold, (_train_idx, _test_idx) in enumerate(_gkf.split(_X, _y, groups=_groups)):
+                _X_train, _X_test = _X[_train_idx], _X[_test_idx]
+                _y_train, _y_test = _y[_train_idx], _y[_test_idx]
+
+                # From scratch
+                _model_scratch = train_xgb_from_scratch(_X_train, _y_train, _X_test, _y_test)
+                _metrics_scratch = evaluate_model(_model_scratch, _X_test, _y_test)
+                all_results.append({
+                    "target": _target_name,
+                    "model": "XGBoost scratch",
+                    "replicate": _rep,
+                    "fold": _fold,
+                    **_metrics_scratch,
+                })
+
+                # Transfer from RLM
+                _model_transfer = train_xgb_transfer(
+                    _X_train, _y_train, _X_test, _y_test, rlm_pretrained_model,
+                )
+                _metrics_transfer = evaluate_model(_model_transfer, _X_test, _y_test)
+                all_results.append({
+                    "target": _target_name,
+                    "model": "XGBoost RLM-transfer",
+                    "replicate": _rep,
+                    "fold": _fold,
+                    **_metrics_transfer,
+                })
+
+        logger.info(f"  Completed {N_REPLICATES * N_FOLDS} folds for {_target_name}")
+
+    results_df = pl.DataFrame(all_results)
+    logger.info(f"Total results: {results_df.height} rows")
+
+    return (results_df,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## Step 4: Results Summary
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo, pl, results_df):
+    # Summary statistics
+    _summary = (
+        results_df
+        .group_by("target", "model")
+        .agg(
+            pl.col("auc_roc").mean().alias("auc_roc_mean"),
+            pl.col("auc_roc").std().alias("auc_roc_std"),
+            pl.col("avg_precision").mean().alias("avg_precision_mean"),
+            pl.col("avg_precision").std().alias("avg_precision_std"),
+            pl.col("auc_roc").count().alias("n_folds"),
+        )
+        .sort("target", "model")
+    )
+
+    mo.vstack([
+        mo.md("### Mean Metrics (25 folds)"),
+        mo.ui.table(_summary),
+    ])
+
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo, pl, results_df):
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    # Boxplots of AUC-ROC by model and target
+    _fig_box, _axes_box = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+
+    for _i, _target in enumerate(["HLM Stability", "PAMPA pH 7.4"]):
+        _subset = results_df.filter(pl.col("target") == _target).to_pandas()
+        sns.boxplot(
+            data=_subset, x="model", y="auc_roc", ax=_axes_box[_i],
+            palette={"XGBoost scratch": "#FF5722", "XGBoost RLM-transfer": "#2196F3"},
+        )
+        _axes_box[_i].set_title(_target)
+        _axes_box[_i].set_xlabel("")
+        _axes_box[_i].set_ylabel("AUC-ROC" if _i == 0 else "")
+        _axes_box[_i].tick_params(axis="x", rotation=15)
+
+    _fig_box.suptitle("XGBoost: From Scratch vs RLM Transfer (25 folds)", fontsize=14)
+    plt.tight_layout()
+
+    mo.vstack([
+        mo.md("### AUC-ROC Distributions"),
+        mo.as_html(_fig_box),
+    ])
+
+    return (plt,)
+
+
+@app.cell(hide_code=True)
+def _(mo, np, pl, plt, results_df):
+    from scipy import stats
+
+    # Paired comparison plots (Walters-style)
+    _fig_paired, _axes_paired = plt.subplots(1, 2, figsize=(14, 5))
+
+    for _i, _target in enumerate(["HLM Stability", "PAMPA pH 7.4"]):
+        _scratch = (
+            results_df
+            .filter((pl.col("target") == _target) & (pl.col("model") == "XGBoost scratch"))
+            .sort("replicate", "fold")
+            .get_column("auc_roc")
+            .to_numpy()
+        )
+        _transfer = (
+            results_df
+            .filter((pl.col("target") == _target) & (pl.col("model") == "XGBoost RLM-transfer"))
+            .sort("replicate", "fold")
+            .get_column("auc_roc")
+            .to_numpy()
+        )
+
+        _ax = _axes_paired[_i]
+        # Lines connecting paired folds
+        for _j in range(len(_scratch)):
+            _color = "#2196F3" if _transfer[_j] > _scratch[_j] else "#FF5722"
+            _ax.plot([0, 1], [_scratch[_j], _transfer[_j]], color=_color, alpha=0.3, linewidth=0.8)
+
+        _ax.scatter(np.zeros(len(_scratch)), _scratch, color="#FF5722", s=15, zorder=5, label="Scratch")
+        _ax.scatter(np.ones(len(_transfer)), _transfer, color="#2196F3", s=15, zorder=5, label="Transfer")
+
+        # Paired t-test
+        _t_stat, _p_value = stats.ttest_rel(_transfer, _scratch)
+        _mean_diff = (_transfer - _scratch).mean()
+        _title_color = "#2196F3" if _p_value < 0.05 and _mean_diff > 0 else (
+            "#FF5722" if _p_value < 0.05 and _mean_diff < 0 else "black"
+        )
+        _title = f"{_target}" + "\n" + f"p={_p_value:.4f}, mean diff={_mean_diff:+.4f}"
+        _ax.set_title(_title, color=_title_color, fontsize=11)
+        _ax.set_xticks([0, 1])
+        _ax.set_xticklabels(["Scratch", "RLM Transfer"])
+        _ax.set_ylabel("AUC-ROC")
+        _ax.legend(fontsize=9)
+
+    _fig_paired.suptitle("Paired Comparison: XGBoost Scratch vs RLM Transfer", fontsize=14)
+    plt.tight_layout()
+
+    mo.vstack([
+        mo.md("### Paired Fold Comparison (AUC-ROC)"),
+        mo.as_html(_fig_paired),
+        mo.md("""
+    Lines connect the same CV fold across the two models. Blue lines = transfer wins,
+    red lines = scratch wins. Title color indicates paired t-test significance
+    (blue = transfer significantly better, red = scratch significantly better,
+    black = no significant difference at p < 0.05).
+        """),
+    ])
+
+    return
+
+
+@app.cell(hide_code=True)
+def _(DATA_DIR, logger, mo, results_df):
+    # Save results for downstream analysis
+    results_df.write_parquet(DATA_DIR / "xgb_results.parquet")
+    logger.info(f"Saved XGBoost results to {DATA_DIR / 'xgb_results.parquet'}")
+
+    # Quick peek at results
+    mo.vstack([
+        mo.md("### Saved Results"),
+        mo.md(f"Results saved to `{DATA_DIR / 'xgb_results.parquet'}` ({results_df.height} rows)"),
+        mo.ui.table(results_df.head(10)),
+    ])
+
+    return
+
+
+if __name__ == "__main__":
+    app.run()
