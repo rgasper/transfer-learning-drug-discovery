@@ -304,7 +304,6 @@ def _(mo):
     from rdkit.Chem import rdFingerprintGenerator
 
     mo.md("## Chemical Space Embedding (PaCMAP)")
-
     return Parallel, delayed, np, pacmap, rdFingerprintGenerator
 
 
@@ -358,20 +357,25 @@ def _(
 
     # Build a lookup from SMILES -> (x, y) coordinates
     smiles_to_xy = {smi: (embedding_2d[i, 0], embedding_2d[i, 1]) for i, smi in enumerate(_valid_smiles)}
-
-    return (smiles_to_xy,)
+    return embedding_2d, smiles_to_xy
 
 
 @app.cell(hide_code=True)
 def _(
     ENDPOINT_NAMES,
     datasets: "dict[str, pl.DataFrame]",
+    embedding_2d,
     mo,
     np,
     plt,
     smiles_to_xy,
 ):
     # Scatter plots: PaCMAP 2D colored by binary label per endpoint
+    # Use shared axis limits so spatial positions are comparable across panels
+    _pad = 1.5
+    _xlim = (embedding_2d[:, 0].min() - _pad, embedding_2d[:, 0].max() + _pad)
+    _ylim = (embedding_2d[:, 1].min() - _pad, embedding_2d[:, 1].max() + _pad)
+
     _fig_scat, _axes_scat = plt.subplots(1, 3, figsize=(18, 5))
 
     _label_colors = {1: "#2196F3", 0: "#FF5722", None: "#CCCCCC"}
@@ -404,6 +408,8 @@ def _(
                     c=_color, s=4, alpha=0.4, label=_label_text, rasterized=True,
                 )
 
+        _axes_scat[_i].set_xlim(_xlim)
+        _axes_scat[_i].set_ylim(_ylim)
         _axes_scat[_i].set_title(ENDPOINT_NAMES[_key])
         _axes_scat[_i].set_xlabel("PaCMAP 1")
         _axes_scat[_i].set_ylabel("PaCMAP 2")
@@ -417,8 +423,8 @@ def _(
         mo.as_html(_fig_scat),
         mo.md("""
     Each point is a molecule embedded via PaCMAP from 2048-bit Morgan fingerprints (radius 3).
-    Colors indicate the binary classification label for each endpoint. Clustering of same-colored
-    points suggests that chemical structure is predictive of the endpoint — a good sign for ML models.
+    All three panels share the same coordinate axes — a single embedding computed across all
+    molecules from all endpoints. Colors indicate the binary classification label.
         """),
     ])
 
@@ -429,14 +435,19 @@ def _(
 def _(
     ENDPOINT_NAMES,
     datasets: "dict[str, pl.DataFrame]",
+    embedding_2d,
     mo,
     plt,
     smiles_to_xy,
 ):
     # Hexbin density plots: one column per endpoint, two rows (active / inactive)
+    # Shared axis limits across all panels
+    _pad = 1.5
+    _xlim_hex = (embedding_2d[:, 0].min() - _pad, embedding_2d[:, 0].max() + _pad)
+    _ylim_hex = (embedding_2d[:, 1].min() - _pad, embedding_2d[:, 1].max() + _pad)
+
     _fig_hex, _axes_hex = plt.subplots(2, 3, figsize=(18, 10))
 
-    _row_labels = {0: "Inactive", 1: "Active"}
     _row_colors = {0: "Oranges", 1: "Blues"}
 
     for _col, (_key, _df) in enumerate(datasets.items()):
@@ -456,6 +467,7 @@ def _(
                 _hb = _ax.hexbin(
                     _xs, _ys, gridsize=25, cmap=_row_colors[_label_val],
                     mincnt=1, edgecolors="none",
+                    extent=(*_xlim_hex, *_ylim_hex),
                 )
                 plt.colorbar(_hb, ax=_ax, label="Count")
 
@@ -465,6 +477,8 @@ def _(
                 "pampa": {1: "Permeable", 0: "Impermeable"},
             }[_key][_label_val]
 
+            _ax.set_xlim(_xlim_hex)
+            _ax.set_ylim(_ylim_hex)
             _ax.set_title(f"{ENDPOINT_NAMES[_key]} — {_label_text} (n={len(_xs)})")
             _ax.set_xlabel("PaCMAP 1")
             _ax.set_ylabel("PaCMAP 2")
@@ -477,6 +491,7 @@ def _(
         mo.as_html(_fig_hex),
         mo.md("""
     Top row: active (stable / permeable) compounds. Bottom row: inactive.
+    All panels share the same coordinate axes from the single shared PaCMAP embedding.
     Density differences between the two rows reveal regions of chemical space
     enriched for one class — structure-activity relationships that ML models can exploit.
         """),
