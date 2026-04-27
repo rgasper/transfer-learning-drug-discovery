@@ -42,7 +42,16 @@ def _():
         path = DATA_DIR / f"{key}_curated.parquet"
         datasets[key] = pl.read_parquet(path)
         logger.info(f"Loaded {key}: {datasets[key].height} rows")
-    return Chem, ENDPOINT_NAMES, MurckoScaffold, datasets, logger, pl, plt
+    return (
+        Chem,
+        DATA_DIR,
+        ENDPOINT_NAMES,
+        MurckoScaffold,
+        datasets,
+        logger,
+        pl,
+        plt,
+    )
 
 
 @app.cell(hide_code=True)
@@ -179,7 +188,7 @@ def _(Chem, MurckoScaffold, datasets: "dict[str, pl.DataFrame]", pl):
         })
 
     overlap_df = pl.DataFrame(_overlap_rows)
-    return (overlap_df,)
+    return overlap_df, smiles_sets
 
 
 @app.cell(hide_code=True)
@@ -197,6 +206,52 @@ def _(mo, overlap_df):
     transfer learning results.
         """),
     ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(ENDPOINT_NAMES, mo, np, plt, smiles_sets: dict[str, set[str]]):
+    # 3x3 molecule overlap heatmap
+    _endpoint_keys = list(ENDPOINT_NAMES.keys())
+    _endpoint_labels = [ENDPOINT_NAMES[k] for k in _endpoint_keys]
+    _n = len(_endpoint_keys)
+
+    _overlap_matrix = np.zeros((_n, _n), dtype=int)
+    for _i, _ki in enumerate(_endpoint_keys):
+        for _j, _kj in enumerate(_endpoint_keys):
+            if _i == _j:
+                _overlap_matrix[_i, _j] = len(smiles_sets[_ki])
+            else:
+                _overlap_matrix[_i, _j] = len(smiles_sets[_ki] & smiles_sets[_kj])
+
+    _fig_cm, _ax_cm = plt.subplots(figsize=(7, 6))
+    _im = _ax_cm.imshow(_overlap_matrix, cmap="Blues")
+
+    # Annotate cells
+    for _i in range(_n):
+        for _j in range(_n):
+            _val = _overlap_matrix[_i, _j]
+            _color = "white" if _val > _overlap_matrix.max() * 0.6 else "black"
+            _ax_cm.text(_j, _i, f"{_val:,}", ha="center", va="center", color=_color, fontsize=13)
+
+    _ax_cm.set_xticks(range(_n))
+    _ax_cm.set_yticks(range(_n))
+    _ax_cm.set_xticklabels(_endpoint_labels, rotation=30, ha="right")
+    _ax_cm.set_yticklabels(_endpoint_labels)
+    _ax_cm.set_title("Molecule Overlap (shared SMILES)")
+    plt.colorbar(_im, ax=_ax_cm, label="Count")
+    plt.tight_layout()
+
+    mo.vstack([
+        mo.md("### Molecule Overlap Matrix"),
+        mo.as_html(_fig_cm),
+        mo.md("""
+    Diagonal: total unique molecules per endpoint. Off-diagonal: number of
+    molecules shared between each pair. RLM and PAMPA share nearly all
+    molecules (same compound library). HLM has minimal overlap with either.
+        """),
+    ])
+
     return
 
 
@@ -357,7 +412,7 @@ def _(
 
     # Build a lookup from SMILES -> (x, y) coordinates
     smiles_to_xy = {smi: (embedding_2d[i, 0], embedding_2d[i, 1]) for i, smi in enumerate(_valid_smiles)}
-    return embedding_2d, smiles_to_xy
+    return all_smiles_df, embedding_2d, fp_matrix, smiles_to_xy
 
 
 @app.cell(hide_code=True)
@@ -427,7 +482,6 @@ def _(
     molecules from all endpoints. Colors indicate the binary classification label.
         """),
     ])
-
     return
 
 
@@ -496,7 +550,569 @@ def _(
     enriched for one class — structure-activity relationships that ML models can exploit.
         """),
     ])
+    return
 
+
+@app.cell(hide_code=True)
+def _(mo):
+    from sklearn.cluster import KMeans
+    from useful_rdkit_utils import GroupKFoldShuffle
+
+    N_REPLICATES = 5
+    N_FOLDS = 5
+    N_CLUSTERS = 50
+    TARGET_ENDPOINTS = ["hlm", "pampa"]
+    PRETRAIN_ENDPOINT = "rlm"
+
+    mo.md("""
+    ## Split Generation
+
+    Cluster molecules in PaCMAP space via KMeans, then use cluster
+    assignments as groups for `GroupKFoldShuffle` (5 replicates x 5 folds
+    = 25 splits per endpoint). Splits are saved to disk for reuse
+    across all downstream training notebooks.
+    """)
+    return (
+        GroupKFoldShuffle,
+        KMeans,
+        N_CLUSTERS,
+        N_FOLDS,
+        N_REPLICATES,
+        PRETRAIN_ENDPOINT,
+        TARGET_ENDPOINTS,
+    )
+
+
+@app.cell(hide_code=True)
+def _(
+    ENDPOINT_NAMES,
+    GroupKFoldShuffle,
+    KMeans,
+    N_CLUSTERS,
+    N_FOLDS,
+    N_REPLICATES,
+    all_smiles_df,
+    datasets: "dict[str, pl.DataFrame]",
+    embedding_2d,
+    logger,
+    np,
+):
+    # Build per-endpoint PaCMAP embeddings by looking up from the global embedding
+    # all_smiles_df was used to build fp_matrix/embedding_2d; recover the order
+    _global_smiles = all_smiles_df.get_column("canonical_smiles").to_list()
+    _global_smi_to_idx = {smi: i for i, smi in enumerate(_global_smiles)}
+
+    # For each endpoint, get the PaCMAP coordinates and cluster
+    endpoint_splits: dict[str, dict] = {}
+
+    for _key in list(ENDPOINT_NAMES.keys()):
+        _df = datasets[_key]
+        _smiles = _df.get_column("canonical_smiles").to_list()
+        _labels = _df.get_column("binary_label").to_list()
+
+        # Map to global embedding indices
+        _idxs = [_global_smi_to_idx[s] for s in _smiles if s in _global_smi_to_idx]
+        _valid_smiles = [s for s in _smiles if s in _global_smi_to_idx]
+        _valid_labels = [_labels[i] for i, s in enumerate(_smiles) if s in _global_smi_to_idx]
+        _emb = embedding_2d[_idxs]
+        _fps_idx = _idxs  # indices into global fp_matrix
+
+        # KMeans on PaCMAP embedding
+        _kmeans = KMeans(n_clusters=min(N_CLUSTERS, len(_valid_smiles) // 3), random_state=42, n_init=10)
+        _cluster_labels = _kmeans.fit_predict(_emb)
+        logger.info(f"{_key}: {len(set(_cluster_labels))} clusters from {len(_valid_smiles)} molecules")
+
+        # Generate all fold assignments
+        _all_folds = []
+        for _rep in range(N_REPLICATES):
+            _gkf = GroupKFoldShuffle(n_splits=N_FOLDS, shuffle=True, random_state=_rep * 100)
+            _fold_assignment = np.full(len(_valid_smiles), -1, dtype=np.int8)
+            for _fold_idx, (_train_idx, _test_idx) in enumerate(_gkf.split(
+                np.arange(len(_valid_smiles)),
+                np.array(_valid_labels),
+                groups=_cluster_labels,
+            )):
+                _fold_assignment[_test_idx] = _fold_idx
+            _all_folds.append(_fold_assignment)
+
+        _folds_matrix = np.stack(_all_folds)  # shape: (N_REPLICATES, n_molecules)
+
+        endpoint_splits[_key] = {
+            "smiles": _valid_smiles,
+            "labels": np.array(_valid_labels, dtype=np.int8),
+            "fp_indices": np.array(_idxs),
+            "cluster_labels": _cluster_labels,
+            "folds": _folds_matrix,  # (N_REPLICATES, n_molecules)
+        }
+
+    logger.info("Split generation complete")
+    return (endpoint_splits,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    from rdkit import DataStructs
+
+    mo.md("""
+    ## Fold Quality Assessment
+
+    Two quality checks on the generated splits:
+
+    1. **Chemical distinctness within a round**: For each molecule in the
+       test fold, compute Tanimoto distance to its 5 nearest neighbors
+       in the other folds (training set) vs within its own fold. Larger
+       cross-fold distances mean the splits separate chemically distinct
+       regions.
+
+    2. **Replicate variation**: For each fold in replicate A, find the
+       fold in replicate B with the highest molecule overlap (Jaccard
+       similarity). The fold index is arbitrary, so we compare
+       best-matching pairs. Values well below 1.0 confirm the shuffle
+       produces meaningfully different partitions.
+    """)
+    return (DataStructs,)
+
+
+@app.cell(hide_code=True)
+def _(
+    Chem,
+    DataStructs,
+    ENDPOINT_NAMES,
+    N_FOLDS,
+    endpoint_splits: dict[str, dict],
+    logger,
+    np,
+    pl,
+    rdFingerprintGenerator,
+):
+    # Compute RDKit fingerprint objects for BulkTanimotoSimilarity
+    _morgan_gen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
+
+    endpoint_rd_fps: dict[str, list] = {}
+    for _key in ENDPOINT_NAMES:
+        _smiles = endpoint_splits[_key]["smiles"]
+        _fps = []
+        for _smi in _smiles:
+            _mol = Chem.MolFromSmiles(_smi)
+            _fps.append(_morgan_gen.GetFingerprint(_mol))
+        endpoint_rd_fps[_key] = _fps
+        logger.info(f"{_key}: computed {len(_fps)} RDKit fingerprint objects")
+
+    K_NEIGHBORS = 5
+
+    def compute_knn_tanimoto_distances(
+        query_fps: list,
+        ref_fps: list,
+        k: int = K_NEIGHBORS,
+    ) -> np.ndarray:
+        """For each query FP, find k nearest neighbors in ref set and return distances.
+
+        Args:
+            query_fps: List of RDKit fingerprint objects (query set).
+            ref_fps: List of RDKit fingerprint objects (reference set).
+            k: Number of nearest neighbors.
+
+        Returns:
+            Array of shape (len(query_fps), k) with Tanimoto distances (1 - similarity).
+        """
+        _k = min(k, len(ref_fps))
+        _result = np.zeros((len(query_fps), _k))
+        for _i, _qfp in enumerate(query_fps):
+            _sims = DataStructs.BulkTanimotoSimilarity(_qfp, ref_fps)
+            _sims_arr = np.array(_sims)
+            # k largest similarities = k smallest distances
+            _top_k_sims = np.sort(_sims_arr)[-_k:][::-1]
+            _result[_i] = 1.0 - _top_k_sims
+        return _result
+
+    # For each endpoint, replicate 0: compare within-fold vs cross-fold 5-NN distances
+    fold_quality_data: list[dict] = []
+
+    for _key in ENDPOINT_NAMES:
+        _fps = endpoint_rd_fps[_key]
+        _folds = endpoint_splits[_key]["folds"][0]  # replicate 0
+
+        for _fold_idx in range(N_FOLDS):
+            _test_mask = _folds == _fold_idx
+            _train_mask = _folds != _fold_idx
+            _test_fps = [_fps[i] for i in range(len(_fps)) if _test_mask[i]]
+            _train_fps = [_fps[i] for i in range(len(_fps)) if _train_mask[i]]
+
+            # Cross-fold: 5-NN distances from test to training
+            _cross_dists = compute_knn_tanimoto_distances(_test_fps, _train_fps, K_NEIGHBORS)
+            # Within-fold: 5-NN distances from test to other test molecules (exclude self)
+            _within_result = np.zeros((len(_test_fps), K_NEIGHBORS))
+            for _i, _qfp in enumerate(_test_fps):
+                _sims = DataStructs.BulkTanimotoSimilarity(_qfp, _test_fps)
+                _sims_arr = np.array(_sims)
+                _sims_arr[_i] = -1.0  # exclude self
+                _k = min(K_NEIGHBORS, len(_sims_arr) - 1)
+                _top_k_sims = np.sort(_sims_arr)[-_k:][::-1]
+                _within_result[_i, :_k] = 1.0 - _top_k_sims
+
+            for _i in range(len(_test_fps)):
+                for _j in range(K_NEIGHBORS):
+                    fold_quality_data.append({
+                        "endpoint": ENDPOINT_NAMES[_key],
+                        "fold": _fold_idx,
+                        "comparison": "cross-fold (test to train)",
+                        "nn_rank": _j + 1,
+                        "tanimoto_distance": _cross_dists[_i, _j],
+                    })
+                    fold_quality_data.append({
+                        "endpoint": ENDPOINT_NAMES[_key],
+                        "fold": _fold_idx,
+                        "comparison": "within-fold (test to test)",
+                        "nn_rank": _j + 1,
+                        "tanimoto_distance": _within_result[_i, _j],
+                    })
+
+    fold_quality_df = pl.DataFrame(fold_quality_data)
+    logger.info(f"Fold quality data: {fold_quality_df.height} rows")
+    return (fold_quality_df,)
+
+
+@app.cell(hide_code=True)
+def _(fold_quality_df, mo, pl, plt):
+    # Plot within-fold vs cross-fold 5-NN Tanimoto distance distributions
+    _fq_pd = fold_quality_df.to_pandas()
+    _all_endpoints = ["RLM Stability", "HLM Stability", "PAMPA pH 7.4"]
+
+    _fig_fq, _axes_fq = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+
+    for _i, _target in enumerate(_all_endpoints):
+        _subset = _fq_pd[_fq_pd["endpoint"] == _target]
+        _within = _subset[_subset["comparison"] == "within-fold (test to test)"]["tanimoto_distance"]
+        _cross = _subset[_subset["comparison"] == "cross-fold (test to train)"]["tanimoto_distance"]
+
+        _axes_fq[_i].hist(_within, bins=50, alpha=0.6, label="Within fold", color="#2196F3", density=True)
+        _axes_fq[_i].hist(_cross, bins=50, alpha=0.6, label="Cross fold", color="#FF5722", density=True)
+        _axes_fq[_i].set_title(_target)
+        _axes_fq[_i].set_xlabel("Tanimoto Distance (1 - similarity)")
+        _axes_fq[_i].set_ylabel("Density" if _i == 0 else "")
+        _axes_fq[_i].legend()
+        _axes_fq[_i].axvline(_within.median(), color="#2196F3", linestyle="--", alpha=0.8)
+        _axes_fq[_i].axvline(_cross.median(), color="#FF5722", linestyle="--", alpha=0.8)
+
+    _fig_fq.suptitle("5-NN Tanimoto Distance: Within-Fold vs Cross-Fold (Replicate 0)", fontsize=14)
+    plt.tight_layout()
+
+    _fq_summary = (
+        fold_quality_df
+        .group_by("endpoint", "comparison")
+        .agg(
+            pl.col("tanimoto_distance").median().alias("median"),
+            pl.col("tanimoto_distance").mean().alias("mean"),
+            pl.col("tanimoto_distance").quantile(0.25).alias("q25"),
+            pl.col("tanimoto_distance").quantile(0.75).alias("q75"),
+        )
+        .sort("endpoint", "comparison")
+    )
+
+    mo.vstack([
+        mo.md("### Chemical Distinctness: Within-Fold vs Cross-Fold 5-NN Distances"),
+        mo.as_html(_fig_fq),
+        mo.ui.table(_fq_summary),
+        mo.md("""
+    Dashed lines show medians. If splits are working well, cross-fold
+    distances (red) should be shifted right of within-fold distances (blue)
+    -- molecules are more chemically distant from the training set than
+    from other molecules in their own test fold.
+        """),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    ENDPOINT_NAMES,
+    N_FOLDS,
+    N_REPLICATES,
+    endpoint_splits: dict[str, dict],
+    logger,
+    np,
+    pl,
+):
+    # Replicate variation: best-match Jaccard overlap between folds across replicates
+    _rep_overlap_rows = []
+
+    for _key in ENDPOINT_NAMES:
+        _folds_matrix = endpoint_splits[_key]["folds"]
+
+        for _rep_a in range(N_REPLICATES):
+            for _rep_b in range(_rep_a + 1, N_REPLICATES):
+                _best_jaccards = []
+                for _fold_a in range(N_FOLDS):
+                    _set_a = set(np.where(_folds_matrix[_rep_a] == _fold_a)[0])
+                    _max_jaccard = 0.0
+                    _best_fold_b = -1
+                    for _fold_b in range(N_FOLDS):
+                        _set_b = set(np.where(_folds_matrix[_rep_b] == _fold_b)[0])
+                        _intersection = len(_set_a & _set_b)
+                        _union = len(_set_a | _set_b)
+                        _jaccard = _intersection / _union if _union > 0 else 0.0
+                        if _jaccard > _max_jaccard:
+                            _max_jaccard = _jaccard
+                            _best_fold_b = _fold_b
+                    _best_jaccards.append(_max_jaccard)
+                    _rep_overlap_rows.append({
+                        "endpoint": ENDPOINT_NAMES[_key],
+                        "rep_a": _rep_a,
+                        "rep_b": _rep_b,
+                        "fold_in_a": _fold_a,
+                        "best_match_fold_in_b": _best_fold_b,
+                        "best_jaccard": _max_jaccard,
+                    })
+
+                _mean_j = np.mean(_best_jaccards)
+                logger.info(
+                    f"{_key} rep {_rep_a} vs {_rep_b}: "
+                    f"mean best-match Jaccard = {_mean_j:.3f}"
+                )
+
+    rep_overlap_df = pl.DataFrame(_rep_overlap_rows)
+    return (rep_overlap_df,)
+
+
+@app.cell(hide_code=True)
+def _(mo, pl, plt, rep_overlap_df):
+    _rep_pd = rep_overlap_df.to_pandas()
+    _all_endpoints = ["RLM Stability", "HLM Stability", "PAMPA pH 7.4"]
+
+    _fig_rep, _axes_rep = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+
+    for _i, _target in enumerate(_all_endpoints):
+        _subset = _rep_pd[_rep_pd["endpoint"] == _target]
+        _axes_rep[_i].hist(_subset["best_jaccard"], bins=20, edgecolor="black", alpha=0.7, color="#7E57C2")
+        _axes_rep[_i].axvline(_subset["best_jaccard"].mean(), color="red", linestyle="--", label=f'Mean = {_subset["best_jaccard"].mean():.3f}')
+        _axes_rep[_i].set_title(_target)
+        _axes_rep[_i].set_xlabel("Best-Match Jaccard Overlap")
+        _axes_rep[_i].set_ylabel("Count" if _i == 0 else "")
+        _axes_rep[_i].set_xlim(0, 1)
+        _axes_rep[_i].legend()
+
+    _fig_rep.suptitle("Replicate Variation: Best-Match Fold Overlap Across Replicates", fontsize=14)
+    plt.tight_layout()
+
+    _rep_summary = (
+        rep_overlap_df
+        .group_by("endpoint")
+        .agg(
+            pl.col("best_jaccard").mean().alias("mean_best_jaccard"),
+            pl.col("best_jaccard").std().alias("std_best_jaccard"),
+            pl.col("best_jaccard").min().alias("min"),
+            pl.col("best_jaccard").max().alias("max"),
+        )
+        .sort("endpoint")
+    )
+
+    mo.vstack([
+        mo.md("### Replicate Variation: Best-Match Fold Overlap"),
+        mo.as_html(_fig_rep),
+        mo.ui.table(_rep_summary),
+        mo.md("""
+    For each fold in replicate A, we find the fold in replicate B with the
+    highest molecule overlap (Jaccard similarity). Fold indices are arbitrary,
+    so this best-match comparison avoids penalizing index permutations.
+
+    Values well below 1.0 confirm the shuffled replicates produce meaningfully
+    different partitions. A mean best-match Jaccard of ~0.2-0.3 means even the
+    most similar fold pair across replicates shares only ~20-30% of molecules.
+        """),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    ENDPOINT_NAMES,
+    N_FOLDS,
+    N_REPLICATES,
+    endpoint_splits: dict[str, dict],
+    logger,
+    pl,
+):
+    # Fold size and class balance across all replicates
+    _fold_balance_rows = []
+
+    for _key in ENDPOINT_NAMES:
+        _labels = endpoint_splits[_key]["labels"]
+        _folds_matrix = endpoint_splits[_key]["folds"]
+
+        for _rep in range(N_REPLICATES):
+            _folds = _folds_matrix[_rep]
+            for _fold_idx in range(N_FOLDS):
+                _mask = _folds == _fold_idx
+                _n_total = _mask.sum()
+                _n_pos = (_labels[_mask] == 1).sum()
+                _n_neg = (_labels[_mask] == 0).sum()
+                _fold_balance_rows.append({
+                    "endpoint": ENDPOINT_NAMES[_key],
+                    "replicate": _rep,
+                    "fold": _fold_idx,
+                    "n_total": int(_n_total),
+                    "n_positive": int(_n_pos),
+                    "n_negative": int(_n_neg),
+                    "pct_positive": round(_n_pos / _n_total * 100, 1) if _n_total > 0 else 0.0,
+                })
+
+    fold_balance_df = pl.DataFrame(_fold_balance_rows)
+
+    # Assign rank per endpoint by mean_size
+    _mean_sizes = (
+        fold_balance_df
+        .group_by("endpoint", "fold")
+        .agg(pl.col("n_total").mean().alias("mean_size"))
+    )
+    _ranked = (
+        _mean_sizes
+        .sort("endpoint", "mean_size")
+        .with_columns(
+            pl.col("fold")
+            .cum_count()
+            .over("endpoint")
+            .alias("size_rank")
+        )
+    )
+    fold_balance_ranked = fold_balance_df.join(
+        _ranked.select("endpoint", "fold", "size_rank"),
+        on=["endpoint", "fold"],
+    )
+
+    logger.info(f"Fold balance data: {fold_balance_ranked.height} rows")
+    return (fold_balance_ranked,)
+
+
+@app.cell(hide_code=True)
+def _(fold_balance_ranked, mo, np, plt):
+    _fb_pd = fold_balance_ranked.to_pandas()
+    _all_endpoints = ["RLM Stability", "HLM Stability", "PAMPA pH 7.4"]
+
+    _fig_fb, _axes_fb = plt.subplots(2, 3, figsize=(18, 10))
+
+    for _col, _target in enumerate(_all_endpoints):
+        _sub = _fb_pd[_fb_pd["endpoint"] == _target].copy()
+
+        for _row, (_count_col, _label, _color) in enumerate([
+            ("n_positive", "Active", "#2196F3"),
+            ("n_negative", "Inactive", "#FF5722"),
+        ]):
+            _ax = _axes_fb[_row][_col]
+
+            _fold_stats = _sub.groupby("size_rank")[_count_col].agg(["mean", "std"]).reset_index()
+            _fold_stats.columns = ["size_rank", "mean", "std"]
+            _fold_stats = _fold_stats.sort_values("size_rank")
+
+            _x_pos = _fold_stats["size_rank"].values
+            _ax.bar(
+                _x_pos, _fold_stats["mean"], yerr=_fold_stats["std"],
+                color=_color, alpha=0.4, capsize=4, edgecolor=_color, linewidth=1.2,
+                label="Mean +/- SD",
+            )
+
+            _jitter = np.random.default_rng(42).uniform(-0.15, 0.15, size=len(_sub))
+            _ax.scatter(
+                _sub["size_rank"].values + _jitter,
+                _sub[_count_col].values,
+                color=_color, s=25, alpha=0.7, edgecolor="white", linewidth=0.5,
+                zorder=5, label="Individual replicates",
+            )
+
+            _ax.set_xlabel("Fold (sorted by size)" if _row == 1 else "")
+            _ax.set_ylabel(f"{_label} count")
+            _ax.set_title(f"{_target} — {_label}" if _row == 0 else "")
+            _ax.set_xticks(_x_pos)
+            _ax.set_xticklabels([f"F{int(r)}" for r in _x_pos])
+            _ax.legend(fontsize=8)
+
+    _fig_fb.suptitle("Fold Class Balance Across Replicates (sorted by fold size)", fontsize=14)
+    plt.tight_layout()
+
+    mo.vstack([
+        mo.md("### Fold Size and Class Balance"),
+        mo.as_html(_fig_fb),
+        mo.md("""
+    Bars show the mean count across 5 replicates, error bars show +/- 1 SD.
+    Overlaid points are individual replicate values. Folds are sorted by
+    total size (smallest to largest). Variation in bar heights across folds
+    reflects the unequal cluster sizes from KMeans.
+        """),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## Save Splits and Fingerprints
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    DATA_DIR,
+    ENDPOINT_NAMES,
+    N_CLUSTERS,
+    N_FOLDS,
+    N_REPLICATES,
+    PRETRAIN_ENDPOINT,
+    TARGET_ENDPOINTS,
+    all_smiles_df,
+    endpoint_splits: dict[str, dict],
+    fp_matrix,
+    logger,
+    mo,
+    np,
+):
+    import json
+
+    # Save the global fingerprint matrix
+    np.savez_compressed(
+        DATA_DIR / "morgan_fps_2048_r3.npz",
+        fp_matrix=fp_matrix,
+        smiles=np.array(all_smiles_df.get_column("canonical_smiles").to_list()),
+    )
+    logger.info(f"Saved global fingerprint matrix: {fp_matrix.shape}")
+
+    # Save per-endpoint splits
+    for _key in ENDPOINT_NAMES:
+        _split = endpoint_splits[_key]
+        np.savez_compressed(
+            DATA_DIR / f"{_key}_splits.npz",
+            smiles=np.array(_split["smiles"]),
+            labels=_split["labels"],
+            fp_indices=_split["fp_indices"],
+            cluster_labels=_split["cluster_labels"],
+            folds=_split["folds"],
+        )
+        logger.info(
+            f"Saved {_key} splits: {len(_split['smiles'])} molecules, "
+            f"{_split['folds'].shape[0]} replicates x {N_FOLDS} folds"
+        )
+
+    # Save split config for reproducibility
+    _config = {
+        "n_replicates": N_REPLICATES,
+        "n_folds": N_FOLDS,
+        "n_clusters": N_CLUSTERS,
+        "target_endpoints": TARGET_ENDPOINTS,
+        "pretrain_endpoint": PRETRAIN_ENDPOINT,
+        "morgan_radius": 3,
+        "morgan_nbits": 2048,
+        "pacmap_n_components": 2,
+        "pacmap_random_state": 42,
+        "kmeans_random_state": 42,
+    }
+    with open(DATA_DIR / "split_config.json", "w") as _f:
+        json.dump(_config, _f, indent=2)
+
+    mo.md(f"""
+    Saved to `{DATA_DIR}/`:
+    - `morgan_fps_2048_r3.npz` — global fingerprint matrix ({fp_matrix.shape[0]} molecules x {fp_matrix.shape[1]} bits)
+    - `{{endpoint}}_splits.npz` — per-endpoint fold assignments ({N_REPLICATES} replicates x {N_FOLDS} folds)
+    - `split_config.json` — split parameters for reproducibility
+    """)
     return
 
 
