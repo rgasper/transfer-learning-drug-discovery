@@ -51,7 +51,6 @@ def _():
 
     N_REPLICATES = 5
     N_FOLDS = 5
-
     return (
         Chem,
         DATA_DIR,
@@ -126,7 +125,6 @@ def _(
         _y = np.array([_labels_map[r[0]] for r in _valid], dtype=np.int8)
         fp_data[_key] = {"X": _X, "y": _y, "smiles": [r[0] for r in _valid]}
         logger.info(f"{_key}: X={_X.shape}, y={_y.shape}, active={(_y == 1).sum()}, inactive={(_y == 0).sum()}")
-
     return (fp_data,)
 
 
@@ -182,7 +180,6 @@ def _(
 
     # Also compute for RLM (used in pretrain splits if needed)
     cluster_labels[PRETRAIN_ENDPOINT] = compute_umap_cluster_labels(fp_data[PRETRAIN_ENDPOINT]["X"])
-
     return (cluster_labels,)
 
 
@@ -301,7 +298,6 @@ def _(
         verbose_eval=False,
     )
     logger.info(f"RLM pretrained model: {rlm_pretrained_model.num_boosted_rounds()} rounds")
-
     return (rlm_pretrained_model,)
 
 
@@ -367,7 +363,6 @@ def _(
 
     results_df = pl.DataFrame(all_results)
     logger.info(f"Total results: {results_df.height} rows")
-
     return (results_df,)
 
 
@@ -399,7 +394,6 @@ def _(mo, pl, results_df):
         mo.md("### Mean Metrics (25 folds)"),
         mo.ui.table(_summary),
     ])
-
     return
 
 
@@ -429,7 +423,6 @@ def _(mo, pl, results_df):
         mo.md("### AUC-ROC Distributions"),
         mo.as_html(_fig_box),
     ])
-
     return (plt,)
 
 
@@ -491,6 +484,37 @@ def _(mo, np, pl, plt, results_df):
     black = no significant difference at p < 0.05).
         """),
     ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo, pl, plt, results_df):
+    from statsmodels.stats.multicomp import pairwise_tukeyhsd
+
+    _fig_tukey, _axes_tukey = plt.subplots(1, 2, figsize=(14, 5))
+
+    for _i, _target in enumerate(["HLM Stability", "PAMPA pH 7.4"]):
+        _subset = results_df.filter(pl.col("target") == _target)
+        _values = _subset.get_column("auc_roc").to_numpy()
+        _groups = _subset.get_column("model").to_list()
+
+        _tukey = pairwise_tukeyhsd(_values, _groups, alpha=0.05)
+        _tukey.plot_simultaneous(ax=_axes_tukey[_i])
+        _axes_tukey[_i].set_title(_target)
+        _axes_tukey[_i].set_xlabel("AUC-ROC")
+
+    _fig_tukey.suptitle("Tukey HSD Simultaneous Confidence Intervals", fontsize=14)
+    plt.tight_layout()
+
+    mo.vstack([
+        mo.md("### Tukey HSD Comparison"),
+        mo.as_html(_fig_tukey),
+        mo.md("""
+    Overlapping intervals indicate no statistically significant difference
+    between models. Non-overlapping intervals indicate a significant
+    difference (FWER-controlled at alpha = 0.05).
+        """),
+    ])
 
     return
 
@@ -507,7 +531,6 @@ def _(DATA_DIR, logger, mo, results_df):
         mo.md(f"Results saved to `{DATA_DIR / 'xgb_results.parquet'}` ({results_df.height} rows)"),
         mo.ui.table(results_df.head(10)),
     ])
-
     return
 
 
