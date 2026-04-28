@@ -62,7 +62,7 @@ def _():
 
 
 @app.cell
-def _(CHECKPOINTS_DIR, DATA_DIR, logger, nn, np, torch):
+def _(CHECKPOINTS_DIR, DATA_DIR, logger, np, torch):
     """Load RLM data and CheMeleon encoder."""
     import json
 
@@ -89,7 +89,6 @@ def _(CHECKPOINTS_DIR, DATA_DIR, logger, nn, np, torch):
     return (
         chemeleon_mp_params,
         chemeleon_mp_state,
-        global_fps,
         rlm_X,
         rlm_folds,
         rlm_labels,
@@ -100,6 +99,7 @@ def _(CHECKPOINTS_DIR, DATA_DIR, logger, nn, np, torch):
 
 @app.cell
 def _(
+    DATA_DIR,
     average_precision_score,
     chemeleon_mp_params,
     chemeleon_mp_state,
@@ -294,7 +294,7 @@ def _(
 
 
 @app.cell
-def _(FIGURES_DIR, efficiency_df, logger, mo, np, pairwise_tukeyhsd, pl, plt):
+def _(FIGURES_DIR, efficiency_df, logger, mo, pairwise_tukeyhsd, pl, plt):
     """Generate data efficiency scatter plot with Tukey HSD annotations."""
     _fractions = [0.01, 0.10, 0.25, 0.50, 0.75, 1.00]
     _models = ["XGBoost scratch", "Chemprop scratch", "CheMeleon frozen"]
@@ -450,10 +450,10 @@ def _(FIGURES_DIR, efficiency_df, logger, mo, np, pairwise_tukeyhsd, pl, plt):
             mo.md("## Data Efficiency: RLM Stability"),
             mo.as_html(_fig),
             mo.md("""
-*Mean AUC-PR (+/- SEM) across 25 CV folds at each training data
-fraction. Asterisks mark models not significantly different from the best
-at that fraction (Tukey HSD, FWER = 0.05). Dotted line = random
-baseline.*
+    *Mean AUC-PR (+/- SEM) across 25 CV folds at each training data
+    fraction. Asterisks mark models not significantly different from the best
+    at that fraction (Tukey HSD, FWER = 0.05). Dotted line = random
+    baseline.*
         """),
             mo.ui.table(_summary_wide),
         ]
