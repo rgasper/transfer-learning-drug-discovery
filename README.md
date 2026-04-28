@@ -194,7 +194,10 @@ molecules. Fragment = radius-3 neighborhood from the molecule where that
 bit contributed most. Blue = pushes toward "stable"; red = "unstable."
 Right (Chemprop): Top 6 atom types by mean gradient saliency across all
 HLM test molecules. Fragment = 1-bond neighborhood around the
-highest-saliency instance (center atom highlighted blue). Error bars = SEM.*
+highest-saliency instance (center atom highlighted blue). Error bars = SEM.
+Results shown are from a single train/test fold; specific rankings may
+vary with a different fold, though the overall pattern (heteroatom
+environments dominating) is consistent.*
 
 Both architectures converge on the same structural story. XGBoost's top
 SHAP features (left) highlight Morgan fingerprint bits corresponding to
@@ -208,6 +211,21 @@ on molecular graphs) is evidence that both learn genuine
 structure-activity rules governing metabolic stability, not
 dataset-specific artifacts -- and these are exactly the rules that
 transfer from RLM to HLM.
+
+We can also compare how features shift between the scratch and transfer
+variants of each architecture:
+
+![HLM XGBoost scratch vs transfer](docs/figures/hlm-xgb-scratch-vs-transfer.png)
+
+*XGBoost: top 6 SHAP features before and after RLM transfer. Shared bits
+between panels indicate features important to both; the transfer model
+inherits useful metabolic-stability signals that align with HLM.*
+
+![HLM Chemprop scratch vs transfer](docs/figures/hlm-chemprop-scratch-vs-transfer.png)
+
+*Chemprop: top 6 atom types by saliency before and after RLM transfer.
+Similar rankings confirm the pre-trained encoder preserves attention to
+the same structural environments after transfer.*
 
 ---
 
@@ -252,7 +270,8 @@ models (trained without RLM transfer) provide the answer:
 *Same methodology as the HLM figure. Left (XGBoost): Top 6 Morgan FP
 bits by mean |SHAP|. Blue = "permeable"; red = "impermeable." Right
 (Chemprop): Top 6 atom types by mean gradient saliency across all PAMPA
-test molecules.*
+test molecules. Single fold; specific rankings may shift with different
+test sets.*
 
 Both architectures attend to lipophilic fragments and aromatic systems --
 structural features governing passive membrane permeability. These are
@@ -261,6 +280,22 @@ that dominate the HLM figure. This contrast is what makes the RLM->PAMPA
 transfer so destructive for XGBoost: the pre-trained model inherits
 attention to metabolic-vulnerability features that are irrelevant (or
 anti-correlated) with permeability.
+
+Comparing scratch vs transfer variants makes this visible:
+
+![PAMPA XGBoost scratch vs transfer](docs/figures/pampa-xgb-scratch-vs-transfer.png)
+
+*XGBoost: top 6 SHAP features before and after RLM transfer. The
+transfer model attends to different bits and often pushes in the opposite
+direction (same bit, different color) -- inherited RLM associations
+conflict with PAMPA permeability signals.*
+
+![PAMPA Chemprop scratch vs transfer](docs/figures/pampa-chemprop-scratch-vs-transfer.png)
+
+*Chemprop: top 6 atom types by saliency before and after RLM transfer.
+Near-identical rankings confirm the D-MPNN transfer does not distort
+attention patterns, even from a mechanistically unrelated source. The new
+FFN head learns the correct mapping without inheriting bias.*
 
 ### The XGBoost catastrophe
 
@@ -379,10 +414,11 @@ which RLM pre-training misleads the PAMPA model: substructures that are
 RLM) are *bad* for permeability, and the transfer model inherits the
 wrong association.
 
-The SHAP magnitude of the disagreed substructures is smaller than the
-agreed ones, which explains why the transfer model's AUC drops but
-doesn't fully collapse to random: the wrong signals are present but not
-dominant enough to override all correct predictions.
+The SHAP magnitude of the disagreed substructures is comparable to
+the agreed ones, which explains why the transfer model collapses
+entirely to the random baseline: the wrong signals inherited from RLM
+are strong enough to overwhelm the correct associations, dragging
+predictions to chance levels across the test set.
 
 ### Chemprop gradient saliency: how the D-MPNN handles the same problem
 
