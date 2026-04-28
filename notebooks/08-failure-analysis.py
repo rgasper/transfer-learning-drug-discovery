@@ -457,7 +457,14 @@ def _(
     _agree.sort(key=lambda x: abs(x[1]) + abs(x[2]), reverse=True)
     _disagree.sort(key=lambda x: abs(x[1]) + abs(x[2]), reverse=True)
 
-    def _draw_bit_on_example(bit, mol, center_atom, radius, size=(250, 200)):
+    def _draw_bit_on_example(
+        bit,
+        mol,
+        center_atom,
+        radius,
+        highlight_color=(0.2, 0.6, 1.0, 0.5),
+        size=(250, 200),
+    ):
         """Draw an example molecule with a specific bit's environment highlighted."""
         _atoms = []
         _bonds = []
@@ -471,9 +478,8 @@ def _(
         else:
             _atoms = [center_atom]
 
-        _color = (0.2, 0.6, 1.0, 0.5)
-        _acols = {a: _color for a in _atoms}
-        _bcols = {b: _color for b in _bonds}
+        _acols = {a: highlight_color for a in _atoms}
+        _bcols = {b: highlight_color for b in _bonds}
 
         _d = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
         _d.DrawMolecule(
@@ -493,13 +499,15 @@ def _(
     if _n_show == 1:
         _axes = _axes.reshape(2, 1)
 
-    # Row 0: agree
+    # Row 0: agree (green highlighting)
     for _j in range(min(_n_show, len(_agree))):
         _bit, _sv_s, _sv_t = _agree[_j]
         _direction = "permeable" if _sv_s > 0 else "impermeable"
         if _bit in _bit_to_example:
             _mol, _center, _rad = _bit_to_example[_bit]
-            _img = _draw_bit_on_example(_bit, _mol, _center, _rad)
+            _img = _draw_bit_on_example(
+                _bit, _mol, _center, _rad, highlight_color=(0.2, 0.8, 0.3, 0.5)
+            )
             _axes[0][_j].imshow(_img)
         _axes[0][_j].set_title(
             f"AGREE: -> {_direction}\nS={_sv_s:+.3f} T={_sv_t:+.3f}",
@@ -508,14 +516,16 @@ def _(
         )
         _axes[0][_j].axis("off")
 
-    # Row 1: disagree
+    # Row 1: disagree (red highlighting)
     for _j in range(min(_n_show, len(_disagree))):
         _bit, _sv_s, _sv_t = _disagree[_j]
         _s_dir = "perm" if _sv_s > 0 else "imperm"
         _t_dir = "perm" if _sv_t > 0 else "imperm"
         if _bit in _bit_to_example:
             _mol, _center, _rad = _bit_to_example[_bit]
-            _img = _draw_bit_on_example(_bit, _mol, _center, _rad)
+            _img = _draw_bit_on_example(
+                _bit, _mol, _center, _rad, highlight_color=(1.0, 0.3, 0.2, 0.5)
+            )
             _axes[1][_j].imshow(_img)
         _axes[1][_j].set_title(
             f"DISAGREE\nS={_sv_s:+.3f}({_s_dir}) T={_sv_t:+.3f}({_t_dir})",

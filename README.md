@@ -140,6 +140,8 @@ estimates for statistical testing.
 
 ## Models
 
+TODO high level restructure. separate out the initial overfit models as a side project in a separate file. mention in here that we initially overfit chemeleon and acheived counterintuitive worse results.
+
 Six model variants organized along two axes: architecture (XGBoost vs
 Chemprop vs CheMeleon) and transfer strategy (scratch vs domain-specific
 vs foundation).
@@ -156,6 +158,8 @@ vs foundation).
 | 8 | CheMeleon frozen double | D-MPNN (foundation init) | 615K trainable | Foundation -> RLM -> target (FFN only) |
 
 ## Results
+
+TODO in combined summary table here, add column marking models which are statistically indistinguishable from best
 
 ### Combined Summary (AUC-ROC, 25 folds)
 
@@ -186,6 +190,8 @@ vs foundation).
 | PAMPA (unrelated) | **-0.150** | **+0.015** | +0.010 |
 
 ### All-Model Comparison
+
+todo remove first auc-roc bar plot there's no purpose to it.
 
 ![All models boxplots](docs/figures/all-models-boxplots.png)
 
@@ -228,6 +234,8 @@ between any two groups indicate a significant difference.
 Chemprop RLM-transfer is the best model for both HLM (0.768) and PAMPA
 (0.716), beating the larger CheMeleon foundation model on both endpoints.
 Two factors explain this.
+
+TODO: not accurate, it is not statistically significantly outperforming everything. a set of models are outperforming some specific poorly performing ones.
 
 **Right-sized model for the data.** The base Chemprop D-MPNN has 318K
 parameters. CheMeleon has 9.3M -- a 29x difference. With ~720 training
@@ -275,6 +283,51 @@ features to the target, unconstrained by old decision boundaries.
 
 This is the fundamental advantage of representation-level transfer: the
 features generalize even when the task does not.
+
+### SHAP substructure analysis: what XGBoost transfer gets wrong
+
+To understand the XGBoost transfer failure mechanistically, we used SHAP
+(TreeExplainer) to identify which Morgan fingerprint bits drive
+predictions for both the scratch and RLM-transfer models on PAMPA, then
+mapped those bits back to chemical substructures.
+
+**Known SAR context.** RLM stability is governed by the presence of
+metabolically vulnerable functional groups — unprotected amines, benzylic
+positions, electron-rich aromatics, and groups susceptible to CYP-mediated
+oxidation. Compounds that lack these "soft spots" tend to be stable.
+PAMPA permeability is governed by different physicochemical properties:
+lipophilicity, molecular size, hydrogen bond donor count, and polar
+surface area. Lipophilic, compact molecules with few H-bond donors cross
+membranes well. A compound can have many CYP-vulnerable groups (unstable
+in RLM) yet still be highly permeable (if it's lipophilic), or vice versa.
+
+**Results.** Of the top 50 most important SHAP features in each model,
+33 substructures show agreement (both models push in the same direction)
+and 9 show disagreement (opposite directions).
+
+![Substructure agreement/disagreement](docs/figures/shap-substructure-agree-disagree.png)
+
+**Agreed substructures (green)** include aromatic ring systems and
+lipophilic fragments that both models correctly associate with
+permeability. These are structural features whose effect on PAMPA
+permeability happens to align with their effect on metabolic stability
+(e.g., fused aromatic systems tend to be both permeable and somewhat
+metabolically stable due to lack of sp3 soft spots).
+
+**Disagreed substructures (red)** include amide-containing fragments
+and alkyl chains where the scratch model learned "impermeable" (possibly
+because amide NH donors reduce permeability) but the transfer model
+learned "permeable" from RLM (possibly because amide bonds are
+metabolically stable — not CYP substrates). This is the mechanism by
+which RLM pre-training misleads the PAMPA model: substructures that are
+*good* for metabolic stability (and thus associated with "active" in
+RLM) are *bad* for permeability, and the transfer model inherits the
+wrong association.
+
+The SHAP magnitude of the disagreed substructures is smaller than the
+agreed ones, which explains why the transfer model's AUC drops but
+doesn't fully collapse to random: the wrong signals are present but
+not dominant enough to override all correct predictions.
 
 ### Why does CheMeleon underperform random-init Chemprop on PAMPA?
 
