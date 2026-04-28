@@ -335,8 +335,8 @@ def _(
         _img_scratch = get_shap_highlighted_image(_mol, _bit_info, _shap_s, top_n=5)
         _img_transfer = get_shap_highlighted_image(_mol, _bit_info, _shap_t, top_n=5)
 
-        # Build figure: two highlighted molecules side by side + SHAP bars
-        _fig, ((_ax1, _ax2), (_ax3, _ax4)) = plt.subplots(2, 2, figsize=(16, 10))
+        # Build figure: two highlighted molecules side by side
+        _fig, (_ax1, _ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
         # Scratch highlighted molecule
         _ax1.imshow(_img_scratch)
@@ -352,48 +352,6 @@ def _(
         )
         _ax2.axis("off")
 
-        # SHAP bar chart - scratch
-        _top_bits_s = np.argsort(np.abs(_shap_s))[-8:][::-1]
-        _bar_vals_s = [_shap_s[b] for b in _top_bits_s]
-        _bar_labels_s = []
-        for _b in _top_bits_s:
-            if _b in _bit_info:
-                _atoms = [
-                    f"{_mol.GetAtomWithIdx(a).GetSymbol()}{a}r{r}"
-                    for a, r in _bit_info[_b]
-                ]
-                _bar_labels_s.append(f"bit{_b} ({','.join(_atoms[:1])})")
-            else:
-                _bar_labels_s.append(f"bit{_b} (off)")
-        _colors_s = ["#2196F3" if v > 0 else "#FF5722" for v in _bar_vals_s]
-        _ax3.barh(range(len(_top_bits_s)), _bar_vals_s, color=_colors_s)
-        _ax3.set_yticks(range(len(_top_bits_s)))
-        _ax3.set_yticklabels(_bar_labels_s, fontsize=8)
-        _ax3.set_xlabel("SHAP value")
-        _ax3.set_title("Scratch: Top SHAP Features")
-        _ax3.invert_yaxis()
-
-        # SHAP bar chart - transfer
-        _top_bits_t = np.argsort(np.abs(_shap_t))[-8:][::-1]
-        _bar_vals_t = [_shap_t[b] for b in _top_bits_t]
-        _bar_labels_t = []
-        for _b in _top_bits_t:
-            if _b in _bit_info:
-                _atoms = [
-                    f"{_mol.GetAtomWithIdx(a).GetSymbol()}{a}r{r}"
-                    for a, r in _bit_info[_b]
-                ]
-                _bar_labels_t.append(f"bit{_b} ({','.join(_atoms[:1])})")
-            else:
-                _bar_labels_t.append(f"bit{_b} (off)")
-        _colors_t = ["#2196F3" if v > 0 else "#FF5722" for v in _bar_vals_t]
-        _ax4.barh(range(len(_top_bits_t)), _bar_vals_t, color=_colors_t)
-        _ax4.set_yticks(range(len(_top_bits_t)))
-        _ax4.set_yticklabels(_bar_labels_t, fontsize=8)
-        _ax4.set_xlabel("SHAP value")
-        _ax4.set_title("RLM-Transfer: Top SHAP Features")
-        _ax4.invert_yaxis()
-
         _fig.suptitle(
             f"Molecule #{_rank + 1}: True={_label_name} | SMILES: {_smi[:60]}{'...' if len(_smi) > 60 else ''}",
             fontsize=12,
@@ -406,11 +364,11 @@ def _(
         [
             mo.md("## SHAP Analysis: Per-Molecule Feature Attribution"),
             mo.md("""
-    For each failure molecule: highlighted structures show the top 5 SHAP
-    features mapped onto the molecular structure. **Blue** regions push the
-    prediction toward active (permeable), **red** regions push toward inactive.
-    Opacity scales with SHAP magnitude. Below each structure, bar charts show
-    the top 8 SHAP feature values with bit-to-substructure annotations.
+For each failure molecule: highlighted structures show the top 5 SHAP
+features mapped onto the molecular structure. **Blue** regions push the
+prediction toward active (permeable), **red** regions push toward inactive.
+Opacity scales with SHAP magnitude. The left structure shows what the
+scratch model focuses on; the right shows the transfer model's focus.
             """),
             *_outputs,
         ]
