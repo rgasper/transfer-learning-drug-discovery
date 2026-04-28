@@ -146,6 +146,9 @@ def _(FIGURES_DIR, all_df, logger, mo, pl, plt, sns):
         "CheMeleon frozen double": "#B39DDB",
     }
 
+    # Random classifier baseline = positive class prevalence
+    _baselines = {"HLM Stability": 0.602, "PAMPA pH 7.4": 0.855}
+
     # --- Combined figure (kept for supplementary) ---
     _fig_box, _axes_box = plt.subplots(1, 2, figsize=(20, 7), sharey=False)
     for _i, _target in enumerate(["HLM Stability", "PAMPA pH 7.4"]):
@@ -160,6 +163,15 @@ def _(FIGURES_DIR, all_df, logger, mo, pl, plt, sns):
             palette=_palette,
             legend=False,
         )
+        _axes_box[_i].axhline(
+            _baselines[_target],
+            color="black",
+            linestyle="--",
+            linewidth=1.2,
+            alpha=0.6,
+            label=f"Random baseline ({_baselines[_target]:.3f})",
+        )
+        _axes_box[_i].legend(fontsize=9, loc="lower right")
         _axes_box[_i].set_title(_target)
         _axes_box[_i].set_xlabel("")
         _axes_box[_i].set_ylabel("AUC-PR" if _i == 0 else "")
@@ -190,6 +202,15 @@ def _(FIGURES_DIR, all_df, logger, mo, pl, plt, sns):
             palette=_palette,
             legend=False,
         )
+        _ax_single.axhline(
+            _baselines[_target],
+            color="black",
+            linestyle="--",
+            linewidth=1.2,
+            alpha=0.6,
+            label=f"Random baseline ({_baselines[_target]:.3f})",
+        )
+        _ax_single.legend(fontsize=9, loc="lower right")
         _ax_single.set_title(f"{_target}: AUC-PR Distributions (25 folds)", fontsize=13)
         _ax_single.set_xlabel("")
         _ax_single.set_ylabel("AUC-PR")
