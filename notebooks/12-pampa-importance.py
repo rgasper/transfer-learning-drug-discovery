@@ -652,7 +652,6 @@ def _(
     xgb_transfer_mean_abs_shap = np.abs(xgb_transfer_shap_values).mean(axis=0)
     xgb_transfer_mean_signed_shap = xgb_transfer_shap_values.mean(axis=0)
     xgb_transfer_top_bits = np.argsort(xgb_transfer_mean_abs_shap)[-6:][::-1]
-
     return (
         xgb_transfer_mean_abs_shap,
         xgb_transfer_mean_signed_shap,
@@ -665,7 +664,6 @@ def _(
 def _(
     Chem,
     logger,
-    np,
     pampa_smiles,
     rdFingerprintGenerator,
     xgb_test_mask,
@@ -863,10 +861,10 @@ def _(
             mo.md("## PAMPA: XGBoost Scratch vs RLM-Transfer"),
             mo.as_html(_fig),
             mo.md("""
-*Top 6 SHAP features for each model. Divergent feature sets and
-opposite color patterns (same bit, different direction) indicate the
-transfer model inherited wrong associations from RLM. Single fold;
-rankings may vary with different test sets.*
+    *Top 6 SHAP features for each model. Divergent feature sets and
+    opposite color patterns (same bit, different direction) indicate the
+    transfer model inherited wrong associations from RLM. Single fold;
+    rankings may vary with different test sets.*
         """),
         ]
     )
@@ -1226,10 +1224,10 @@ def _(
             mo.md("## PAMPA: Chemprop Scratch vs RLM-Transfer"),
             mo.as_html(_fig),
             mo.md("""
-*Top 6 atom types by gradient saliency for each model. Similar rankings
-indicate the D-MPNN transfer does not distort attention patterns, even
-when transferring from an unrelated endpoint. Single fold; rankings may
-vary with different test sets.*
+    *Top 6 atom types by gradient saliency for each model. Similar rankings
+    indicate the D-MPNN transfer does not distort attention patterns, even
+    when transferring from an unrelated endpoint. Single fold; rankings may
+    vary with different test sets.*
         """),
         ]
     )

@@ -94,7 +94,15 @@ def _(DATA_DIR, logger, np):
     rlm_X = global_fps[rlm_fp_indices]
 
     logger.info(f"HLM: {hlm_X.shape[0]} molecules, RLM: {rlm_X.shape[0]} molecules")
-    return hlm_X, hlm_folds, hlm_labels, hlm_smiles, rlm_X, rlm_labels, rlm_smiles
+    return (
+        hlm_X,
+        hlm_folds,
+        hlm_labels,
+        hlm_smiles,
+        rlm_X,
+        rlm_labels,
+        rlm_smiles,
+    )
 
 
 @app.cell
@@ -664,7 +672,6 @@ def _(
     xgb_transfer_mean_abs_shap = np.abs(xgb_transfer_shap_values).mean(axis=0)
     xgb_transfer_mean_signed_shap = xgb_transfer_shap_values.mean(axis=0)
     xgb_transfer_top_bits = np.argsort(xgb_transfer_mean_abs_shap)[-6:][::-1]
-
     return (
         xgb_transfer_mean_abs_shap,
         xgb_transfer_mean_signed_shap,
@@ -678,7 +685,6 @@ def _(
     Chem,
     hlm_smiles,
     logger,
-    np,
     rdFingerprintGenerator,
     xgb_test_mask,
     xgb_transfer_shap_values,
@@ -882,9 +888,9 @@ def _(
             mo.md("## HLM: XGBoost Scratch vs RLM-Transfer"),
             mo.as_html(_fig),
             mo.md(f"""
-*Top 6 SHAP features for each model. Shared bits between the two panels
-indicate features important to both; unique bits show what transfer adds
-or changes. Single fold; rankings may vary with different test sets.*
+    *Top 6 SHAP features for each model. Shared bits between the two panels
+    indicate features important to both; unique bits show what transfer adds
+    or changes. Single fold; rankings may vary with different test sets.*
         """),
         ]
     )
@@ -905,8 +911,8 @@ def _(
     models,
     nn,
     np,
-    rlm_smiles,
     rlm_labels,
+    rlm_smiles,
     roc_auc_score,
     torch,
 ):
@@ -1255,9 +1261,9 @@ def _(
             mo.md("## HLM: Chemprop Scratch vs RLM-Transfer"),
             mo.as_html(_fig),
             mo.md("""
-*Top 6 atom types by gradient saliency for each model. Similar rankings
-indicate the transfer model preserved useful attention patterns from
-pre-training. Single fold; rankings may vary with different test sets.*
+    *Top 6 atom types by gradient saliency for each model. Similar rankings
+    indicate the transfer model preserved useful attention patterns from
+    pre-training. Single fold; rankings may vary with different test sets.*
         """),
         ]
     )
