@@ -52,7 +52,7 @@ def _(DATA_DIR, logger, pl):
         [xgb_results_df, chemprop_results_df, chemeleon_results_df]
     )
     logger.info(f"Combined: {all_results_df.height} total results")
-    return all_results_df, chemeleon_results_df, chemprop_results_df, xgb_results_df
+    return (all_results_df,)
 
 
 @app.cell
