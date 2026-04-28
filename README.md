@@ -668,6 +668,21 @@ particular model configurations tested. Different dataset sizes, endpoint
 types, hyperparameter choices, or pre-training strategies could yield
 different rankings.
 
+### Additional experiments
+
+Two supplementary analyses extend the main findings:
+
+- **CheMeleon feature importance on PAMPA** (notebook 13): Compares
+  gradient saliency between the frozen single-finetune (Foundation→PAMPA)
+  and frozen double-finetune (Foundation→RLM→PAMPA) to test whether the
+  intermediate RLM step alters what the frozen encoder attends to.
+
+- **Reverse transfer: PAMPA→RLM** ([docs/reverse-transfer.md](docs/reverse-transfer.md),
+  notebook 14): Tests whether the architectural vulnerability is
+  symmetric. Pre-trains on PAMPA, finetunes on RLM. If our thesis holds,
+  XGBoost should again suffer negative transfer while Chemprop remains
+  robust.
+
 ---
 
 ## Methods Appendix
@@ -883,6 +898,8 @@ xfer-learning/
     10-hlm-importance.py               # Marimo: HLM feature importance (XGBoost + Chemprop)
     11-rlm-base-comparison.py          # Marimo: RLM base model equivalence validation
     12-pampa-importance.py             # Marimo: PAMPA feature importance (XGBoost + Chemprop)
+    13-chemeleon-pampa-importance.py   # Marimo: CheMeleon frozen single vs double on PAMPA
+    14-reverse-transfer.py             # Marimo: Reverse experiment (PAMPA → RLM)
   scripts/
     run-chemprop-training.py           # Chemprop CV training with disk caching
     run-chemeleon-training.py          # CheMeleon CV training with disk caching
@@ -895,6 +912,7 @@ xfer-learning/
   docs/
     initial-plan.md                    # Experiment design document
     chemeleon-overfitting.md           # CheMeleon overfitting narrative
+    reverse-transfer.md                # Reverse transfer experiment (PAMPA → RLM)
     xgb-transfer-ablation.md           # XGBoost ablation results
     tukey-hsd-interval-widths.md       # Statistical method note
     figures/                           # Exported plots
@@ -929,6 +947,8 @@ uv run marimo edit notebooks/09-chemprop-saliency.py
 uv run marimo edit notebooks/10-hlm-importance.py
 uv run marimo edit notebooks/11-rlm-base-comparison.py
 uv run marimo edit notebooks/12-pampa-importance.py
+uv run marimo edit notebooks/13-chemeleon-pampa-importance.py
+uv run marimo edit notebooks/14-reverse-transfer.py
 ```
 
 ## References
