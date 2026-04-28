@@ -272,12 +272,8 @@ def _(
     chemprop_atom_type_saliency = defaultdict(list)
     chemprop_atom_type_best = {}  # key -> (mol, atom_idx, norm_saliency)
 
-    _sample_idx = np.random.default_rng(42).choice(
-        len(_test_smi), size=min(100, len(_test_smi)), replace=False
-    )
-
     _n_success = 0
-    for _i in _sample_idx:
+    for _i in range(len(_test_smi)):
         _smi = _test_smi[_i]
         _mol = Chem.MolFromSmiles(_smi)
         if _mol is None:
