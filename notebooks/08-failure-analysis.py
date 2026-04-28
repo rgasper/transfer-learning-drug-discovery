@@ -32,14 +32,13 @@ def _():
     import xgboost as xgb
     from loguru import logger
     from rdkit import Chem
-    from rdkit.Chem import Draw, rdFingerprintGenerator
+    from rdkit.Chem import rdFingerprintGenerator
     from sklearn.metrics import roc_auc_score
 
     DATA_DIR = Path("data")
     return (
         Chem,
         DATA_DIR,
-        Draw,
         json,
         logger,
         np,
@@ -233,7 +232,6 @@ def _(X_test, logger, model_scratch, model_transfer, shap):
 @app.cell
 def _(
     Chem,
-    Draw,
     failure_indices,
     failure_molecules,
     mo,
@@ -243,7 +241,75 @@ def _(
     shap_scratch,
     shap_transfer,
 ):
-    # For each failure molecule, show top SHAP features and map to substructures
+    import io
+
+    from PIL import Image
+    from rdkit.Chem.Draw import rdMolDraw2D
+
+    def get_shap_highlighted_image(
+        mol,
+        bit_info,
+        shap_values,
+        top_n=5,
+        size=(450, 350),
+    ):
+        """Draw molecule with top SHAP bits highlighted on the structure.
+
+        Blue = pushes toward active (positive SHAP), Red = pushes toward inactive.
+        Opacity scales with |SHAP| magnitude.
+        """
+        top_bits = np.argsort(np.abs(shap_values))[-top_n:][::-1]
+        max_shap = max(np.abs(shap_values[top_bits]).max(), 1e-8)
+
+        all_atoms = []
+        all_bonds = []
+        atom_colors = {}
+        bond_colors = {}
+
+        for bit in top_bits:
+            if bit not in bit_info:
+                continue
+            sv = shap_values[bit]
+            intensity = float(min(float(abs(sv)) / float(max_shap), 1.0) * 0.6 + 0.2)
+            if sv > 0:
+                color = (0.13, 0.59, 0.95, intensity)  # blue
+            else:
+                color = (1.0, 0.34, 0.13, intensity)  # red
+
+            for center_atom, radius in bit_info[bit]:
+                if radius > 0:
+                    env = Chem.FindAtomEnvironmentOfRadiusN(mol, radius, center_atom)
+                    if env:
+                        atom_map = {}
+                        Chem.PathToSubmol(mol, env, atomMap=atom_map)
+                        for a in atom_map.keys():
+                            if a not in atom_colors:
+                                all_atoms.append(a)
+                                atom_colors[a] = color
+                        for b in env:
+                            if b not in bond_colors:
+                                all_bonds.append(b)
+                                bond_colors[b] = color
+                else:
+                    if center_atom not in atom_colors:
+                        all_atoms.append(center_atom)
+                        atom_colors[center_atom] = color
+
+        drawer = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
+        opts = drawer.drawOptions()
+        opts.clearBackground = True
+        drawer.DrawMolecule(
+            mol,
+            highlightAtoms=list(set(all_atoms)),
+            highlightAtomColors=atom_colors,
+            highlightBonds=list(set(all_bonds)),
+            highlightBondColors=bond_colors,
+        )
+        drawer.FinishDrawing()
+        png_bytes = drawer.GetDrawingText()
+        return Image.open(io.BytesIO(png_bytes))
+
+    # For each failure molecule, show highlighted structures for both models
     _gen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
     _outputs = []
 
@@ -251,6 +317,8 @@ def _(
         _row = failure_molecules.row(_rank, named=True)
         _smi = _row["smiles"]
         _mol = Chem.MolFromSmiles(_smi)
+        if _mol is None:
+            continue
         _true = _row["true_label"]
         _label_name = "Permeable" if _true == 1 else "Impermeable"
 
@@ -260,25 +328,32 @@ def _(
         _fp = _gen.GetFingerprint(_mol, additionalOutput=_ao)
         _bit_info = _ao.GetBitInfoMap()
 
-        # Top 10 SHAP bits by absolute value for each model
         _shap_s = shap_scratch[_idx]
         _shap_t = shap_transfer[_idx]
-        _top_scratch = np.argsort(np.abs(_shap_s))[-10:][::-1]
-        _top_transfer = np.argsort(np.abs(_shap_t))[-10:][::-1]
 
-        # Build comparison figure
-        _fig, (_ax1, _ax2, _ax3) = plt.subplots(1, 3, figsize=(18, 4))
+        # Generate highlighted images
+        _img_scratch = get_shap_highlighted_image(_mol, _bit_info, _shap_s, top_n=5)
+        _img_transfer = get_shap_highlighted_image(_mol, _bit_info, _shap_t, top_n=5)
 
-        # Molecule image
-        _img = Draw.MolToImage(_mol, size=(300, 300))
-        _ax1.imshow(_img)
+        # Build figure: two highlighted molecules side by side + SHAP bars
+        _fig, ((_ax1, _ax2), (_ax3, _ax4)) = plt.subplots(2, 2, figsize=(16, 10))
+
+        # Scratch highlighted molecule
+        _ax1.imshow(_img_scratch)
         _ax1.set_title(
-            f"#{_rank + 1}: {_label_name}\nP(scratch)={_row['prob_scratch']:.3f}, P(transfer)={_row['prob_transfer']:.3f}"
+            f"XGBoost Scratch\nP(active)={_row['prob_scratch']:.3f}", fontsize=11
         )
         _ax1.axis("off")
 
-        # SHAP waterfall-style bar for scratch
-        _top_bits_s = _top_scratch[:8]
+        # Transfer highlighted molecule
+        _ax2.imshow(_img_transfer)
+        _ax2.set_title(
+            f"XGBoost RLM-Transfer\nP(active)={_row['prob_transfer']:.3f}", fontsize=11
+        )
+        _ax2.axis("off")
+
+        # SHAP bar chart - scratch
+        _top_bits_s = np.argsort(np.abs(_shap_s))[-8:][::-1]
         _bar_vals_s = [_shap_s[b] for b in _top_bits_s]
         _bar_labels_s = []
         for _b in _top_bits_s:
@@ -287,19 +362,19 @@ def _(
                     f"{_mol.GetAtomWithIdx(a).GetSymbol()}{a}r{r}"
                     for a, r in _bit_info[_b]
                 ]
-                _bar_labels_s.append(f"bit{_b}\n{','.join(_atoms[:2])}")
+                _bar_labels_s.append(f"bit{_b} ({','.join(_atoms[:1])})")
             else:
-                _bar_labels_s.append(f"bit{_b}\n(off)")
+                _bar_labels_s.append(f"bit{_b} (off)")
         _colors_s = ["#2196F3" if v > 0 else "#FF5722" for v in _bar_vals_s]
-        _ax2.barh(range(len(_top_bits_s)), _bar_vals_s, color=_colors_s)
-        _ax2.set_yticks(range(len(_top_bits_s)))
-        _ax2.set_yticklabels(_bar_labels_s, fontsize=8)
-        _ax2.set_xlabel("SHAP value")
-        _ax2.set_title("XGBoost Scratch")
-        _ax2.invert_yaxis()
+        _ax3.barh(range(len(_top_bits_s)), _bar_vals_s, color=_colors_s)
+        _ax3.set_yticks(range(len(_top_bits_s)))
+        _ax3.set_yticklabels(_bar_labels_s, fontsize=8)
+        _ax3.set_xlabel("SHAP value")
+        _ax3.set_title("Scratch: Top SHAP Features")
+        _ax3.invert_yaxis()
 
-        # SHAP waterfall-style bar for transfer
-        _top_bits_t = _top_transfer[:8]
+        # SHAP bar chart - transfer
+        _top_bits_t = np.argsort(np.abs(_shap_t))[-8:][::-1]
         _bar_vals_t = [_shap_t[b] for b in _top_bits_t]
         _bar_labels_t = []
         for _b in _top_bits_t:
@@ -308,17 +383,21 @@ def _(
                     f"{_mol.GetAtomWithIdx(a).GetSymbol()}{a}r{r}"
                     for a, r in _bit_info[_b]
                 ]
-                _bar_labels_t.append(f"bit{_b}\n{','.join(_atoms[:2])}")
+                _bar_labels_t.append(f"bit{_b} ({','.join(_atoms[:1])})")
             else:
-                _bar_labels_t.append(f"bit{_b}\n(off)")
+                _bar_labels_t.append(f"bit{_b} (off)")
         _colors_t = ["#2196F3" if v > 0 else "#FF5722" for v in _bar_vals_t]
-        _ax3.barh(range(len(_top_bits_t)), _bar_vals_t, color=_colors_t)
-        _ax3.set_yticks(range(len(_top_bits_t)))
-        _ax3.set_yticklabels(_bar_labels_t, fontsize=8)
-        _ax3.set_xlabel("SHAP value")
-        _ax3.set_title("XGBoost RLM-Transfer")
-        _ax3.invert_yaxis()
+        _ax4.barh(range(len(_top_bits_t)), _bar_vals_t, color=_colors_t)
+        _ax4.set_yticks(range(len(_top_bits_t)))
+        _ax4.set_yticklabels(_bar_labels_t, fontsize=8)
+        _ax4.set_xlabel("SHAP value")
+        _ax4.set_title("RLM-Transfer: Top SHAP Features")
+        _ax4.invert_yaxis()
 
+        _fig.suptitle(
+            f"Molecule #{_rank + 1}: True={_label_name} | SMILES: {_smi[:60]}{'...' if len(_smi) > 60 else ''}",
+            fontsize=12,
+        )
         plt.tight_layout()
         _outputs.append(mo.as_html(_fig))
         plt.close(_fig)
@@ -327,12 +406,12 @@ def _(
         [
             mo.md("## SHAP Analysis: Per-Molecule Feature Attribution"),
             mo.md("""
-    For each failure molecule: the structure (left), top 8 SHAP features
-    for XGBoost scratch (center), and top 8 SHAP features for XGBoost
-    RLM-transfer (right). Blue bars push prediction toward active (permeable),
-    red bars push toward inactive. Bit labels show the fingerprint bit index
-    and the atom center + radius of the Morgan environment.
-        """),
+    For each failure molecule: highlighted structures show the top 5 SHAP
+    features mapped onto the molecular structure. **Blue** regions push the
+    prediction toward active (permeable), **red** regions push toward inactive.
+    Opacity scales with SHAP magnitude. Below each structure, bar charts show
+    the top 8 SHAP feature values with bit-to-substructure annotations.
+            """),
             *_outputs,
         ]
     )
