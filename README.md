@@ -544,6 +544,46 @@ is statistically significant (frozen single 0.730 vs unfrozen single
 the effect is present but compressed by the narrow effective range above
 the 0.855 baseline.
 
+### What the frozen encoder attends to
+
+With the encoder frozen, only the FFN head differs between single and
+double finetune. Does the intermediate RLM step change what the model
+attends to?
+
+![CheMeleon frozen single vs double](docs/figures/pampa-chemeleon-single-vs-double.png)
+
+*CheMeleon frozen single-finetune (Foundation→PAMPA) vs frozen
+double-finetune (Foundation→RLM→PAMPA). Top 6 atom types by gradient
+saliency. Since the encoder is frozen, differences reflect the FFN
+head only. Single fold.*
+
+The two panels are nearly identical: S deg1, O(arom) deg2, S deg2,
+S deg4, S(arom) deg2, and N(arom) deg3 appear in both top-6 lists in
+the same order. Importantly, the two models are not *forced* to attend
+to the same features just because the encoder is frozen. The saliency
+measurement captures how much the final prediction depends on each atom,
+which is influenced by both the encoder and the decision-making layer
+(FFN head). Since the FFN heads were trained via different paths (one
+saw RLM data, one did not), they could in principle weight the encoder's
+outputs differently. The fact that they don't -- that independently
+trained decision layers converge on the same atomic attention pattern --
+suggests the foundation encoder produces features whose relative
+importance is baked into the representation itself, not imposed by
+downstream training.
+
+The dominance of sulfur environments (S deg1, S deg2, S deg4, S(arom)
+deg2 -- four of the top six) is chemically interesting. Thioethers and
+sulfonamides are common motifs in drug-like molecules that affect both
+lipophilicity (via the polarizable sulfur atom) and membrane
+partitioning. The CheMeleon foundation model, pre-trained on Mordred
+descriptors across 1M compounds, appears to have learned particularly
+discriminating representations for sulfur-containing functional groups.
+Aromatic oxygens (O(arom) deg2 -- furan/pyran-type oxygens) and
+aromatic nitrogens (N(arom) deg3 -- trisubstituted pyridine-like
+nitrogens) round out the top features, both of which influence the
+balance of lipophilicity and hydrogen bonding that governs passive
+permeability.
+
 The frozen CheMeleon models are statistically indistinguishable from
 Chemprop RLM-transfer under both AUC-PR (p > 0.99) and AUC-ROC
 (p > 0.98) on PAMPA. The CheMeleon foundation representations -- learned
