@@ -37,8 +37,7 @@ def _():
     from loguru import logger
     from PIL import Image
     from rdkit import Chem
-    from rdkit.Chem import rdFingerprintGenerator
-    from rdkit.Chem.Draw import rdMolDraw2D
+    from rdkit.Chem import AllChem, Draw, rdFingerprintGenerator, rdMolDraw2D
     from sklearn.metrics import roc_auc_score
 
     from chemprop import data as chemprop_data
@@ -49,8 +48,10 @@ def _():
     FIGURES_DIR = Path("docs/figures")
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     return (
+        AllChem,
         Chem,
         DATA_DIR,
+        Draw,
         FIGURES_DIR,
         Image,
         chemprop_data,
@@ -91,14 +92,7 @@ def _(DATA_DIR, json, logger, np):
     hlm_fp_indices = _hlm_split["fp_indices"]
     hlm_X = global_fps[hlm_fp_indices]
 
-    # RLM splits (for pre-training)
-    _rlm_split = np.load(DATA_DIR / "rlm_splits.npz", allow_pickle=True)
-    rlm_smiles = list(_rlm_split["smiles"])
-    rlm_labels = _rlm_split["labels"]
-    rlm_fp_indices = _rlm_split["fp_indices"]
-    rlm_X = global_fps[rlm_fp_indices]
-
-    logger.info(f"HLM: {hlm_X.shape[0]} molecules, RLM: {rlm_X.shape[0]} molecules")
+    logger.info(f"HLM: {hlm_X.shape[0]} molecules")
     return hlm_X, hlm_folds, hlm_labels, hlm_smiles
 
 
@@ -167,13 +161,12 @@ def _(
     xgb_shap_values,
     xgb_test_mask,
 ):
-    """Map top SHAP bits to substructures and compute mean importance."""
+    """Map top SHAP bits to substructure fragments."""
     _gen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
     _test_smiles = [hlm_smiles[i] for i in range(len(hlm_smiles)) if xgb_test_mask[i]]
 
-    # Map bits to SMARTS and example molecules
-    xgb_bit_to_smarts = defaultdict(set)
-    xgb_bit_to_example = {}
+    # For each bit, collect the submolecule fragment (not the whole molecule)
+    xgb_bit_to_fragment = {}
 
     for _smi in _test_smiles:
         _mol = Chem.MolFromSmiles(_smi)
@@ -185,37 +178,42 @@ def _(
         _bit_info = _ao.GetBitInfoMap()
 
         for _bit, _envs in _bit_info.items():
-            for _center, _rad in _envs:
-                try:
-                    if _rad > 0:
-                        _env = Chem.FindAtomEnvironmentOfRadiusN(_mol, _rad, _center)
-                        if _env:
-                            _amap = {}
-                            _submol = Chem.PathToSubmol(_mol, _env, atomMap=_amap)
-                            _smarts = Chem.MolToSmarts(_submol)
-                            xgb_bit_to_smarts[_bit].add(_smarts)
-                    else:
-                        _atom = _mol.GetAtomWithIdx(_center)
-                        xgb_bit_to_smarts[_bit].add(f"[#{_atom.GetAtomicNum()}]")
-                    if _bit not in xgb_bit_to_example:
-                        xgb_bit_to_example[_bit] = (_mol, _center, _rad)
-                except Exception:
-                    continue
+            if _bit in xgb_bit_to_fragment:
+                continue
+            _center, _rad = _envs[0]
+            try:
+                if _rad > 0:
+                    _env = Chem.FindAtomEnvironmentOfRadiusN(_mol, _rad, _center)
+                    if _env:
+                        _amap = {}
+                        _submol = Chem.PathToSubmol(_mol, _env, atomMap=_amap)
+                        _smiles = Chem.MolToSmiles(_submol)
+                        _frag = Chem.MolFromSmiles(_smiles)
+                        if _frag is not None:
+                            xgb_bit_to_fragment[_bit] = _frag
+                else:
+                    _atom = _mol.GetAtomWithIdx(_center)
+                    _smiles = f"[{_atom.GetSymbol()}]"
+                    _frag = Chem.MolFromSmiles(_smiles)
+                    if _frag is not None:
+                        xgb_bit_to_fragment[_bit] = _frag
+            except Exception:
+                continue
 
     # Mean absolute SHAP per bit, and mean signed SHAP
     xgb_mean_abs_shap = np.abs(xgb_shap_values).mean(axis=0)
     xgb_mean_signed_shap = xgb_shap_values.mean(axis=0)
 
-    # Top 20 bits by mean |SHAP|
-    xgb_top20_bits = np.argsort(xgb_mean_abs_shap)[-20:][::-1]
+    # Top 15 bits by mean |SHAP|
+    xgb_top_bits = np.argsort(xgb_mean_abs_shap)[-15:][::-1]
 
-    logger.info(f"Mapped {len(xgb_bit_to_smarts)} bits to substructures")
-    logger.info(f"Top 20 bits by mean |SHAP|: {xgb_top20_bits.tolist()}")
+    logger.info(f"Mapped {len(xgb_bit_to_fragment)} bits to fragment structures")
+    logger.info(f"Top 15 bits by mean |SHAP|: {xgb_top_bits.tolist()}")
     return (
-        xgb_bit_to_example,
+        xgb_bit_to_fragment,
         xgb_mean_abs_shap,
         xgb_mean_signed_shap,
-        xgb_top20_bits,
+        xgb_top_bits,
     )
 
 
@@ -326,8 +324,6 @@ def _(
         _grad = _bmg.V.grad.abs().sum(dim=1).detach().numpy()
         return _grad, _pred.item()
 
-    # Store featurizer and saliency function for next cell
-    chemprop_featurizer = _featurizer
     chemprop_saliency_fn = _compute_atom_saliency
     return chemprop_model, chemprop_saliency_fn, chemprop_test_mask
 
@@ -343,12 +339,13 @@ def _(
     logger,
     np,
 ):
-    """Compute aggregated atom-type saliency across sampled HLM test molecules."""
+    """Compute aggregated atom-type saliency and collect representative fragments."""
     _test_smi = [hlm_smiles[i] for i in range(len(hlm_smiles)) if chemprop_test_mask[i]]
 
     chemprop_atom_type_saliency = defaultdict(list)
+    # For each atom type, store a small representative fragment (1-hop neighborhood)
+    chemprop_atom_type_fragment = {}
 
-    # Sample molecules for speed
     _sample_idx = np.random.default_rng(42).choice(
         len(_test_smi), size=min(100, len(_test_smi)), replace=False
     )
@@ -376,14 +373,29 @@ def _(
             _degree = _atom.GetDegree()
             _key = f"{_symbol}{'(arom)' if _is_aromatic else ''} deg{_degree}"
             chemprop_atom_type_saliency[_key].append(float(_sal[_a] / _max_sal))
+
+            # Extract a 2-bond neighborhood fragment for this atom type
+            if _key not in chemprop_atom_type_fragment:
+                try:
+                    _env = Chem.FindAtomEnvironmentOfRadiusN(_mol, 2, _a)
+                    if _env:
+                        _amap = {}
+                        _submol = Chem.PathToSubmol(_mol, _env, atomMap=_amap)
+                        _frag_smi = Chem.MolToSmiles(_submol)
+                        _frag = Chem.MolFromSmiles(_frag_smi)
+                        if _frag is not None and _frag.GetNumAtoms() <= 12:
+                            chemprop_atom_type_fragment[_key] = _frag
+                except Exception:
+                    pass
+
         _n_success += 1
 
     logger.info(
         f"Chemprop saliency: {_n_success} molecules, "
-        f"{len(chemprop_atom_type_saliency)} atom types"
+        f"{len(chemprop_atom_type_saliency)} atom types, "
+        f"{len(chemprop_atom_type_fragment)} with fragments"
     )
 
-    # Compute mean saliency per atom type, sorted by importance
     chemprop_atom_means = {
         k: float(np.mean(v)) for k, v in chemprop_atom_type_saliency.items()
     }
@@ -394,7 +406,12 @@ def _(
     chemprop_top_atom_types = sorted(
         chemprop_atom_means.keys(), key=lambda k: chemprop_atom_means[k], reverse=True
     )[:15]
-    return chemprop_atom_means, chemprop_atom_stderrs, chemprop_top_atom_types
+    return (
+        chemprop_atom_means,
+        chemprop_atom_stderrs,
+        chemprop_atom_type_fragment,
+        chemprop_top_atom_types,
+    )
 
 
 @app.cell
@@ -404,66 +421,74 @@ def _(
     Image,
     chemprop_atom_means,
     chemprop_atom_stderrs,
+    chemprop_atom_type_fragment,
     chemprop_top_atom_types,
     io,
     logger,
     mo,
     np,
     plt,
-    rdFingerprintGenerator,
     rdMolDraw2D,
-    xgb_bit_to_example,
+    xgb_bit_to_fragment,
     xgb_mean_abs_shap,
     xgb_mean_signed_shap,
-    xgb_top20_bits,
+    xgb_top_bits,
 ):
     """Generate the combined HLM feature importance figure."""
 
-    def _draw_bit_env(mol, center_atom, radius, color, size=(180, 140)):
-        """Draw an example molecule with a fingerprint bit environment highlighted."""
-        _atoms = []
-        _bonds = []
-        if radius > 0:
-            _env = Chem.FindAtomEnvironmentOfRadiusN(mol, radius, center_atom)
-            if _env:
-                _amap = {}
-                Chem.PathToSubmol(mol, _env, atomMap=_amap)
-                _atoms = list(_amap.keys())
-                _bonds = list(_env)
-        else:
-            _atoms = [center_atom]
+    def _draw_fragment(mol, size=(200, 150)):
+        """Draw a small molecule fragment cleanly.
 
-        _acols = {a: color for a in _atoms}
-        _bcols = {b: color for b in _bonds}
+        Args:
+            mol: RDKit molecule (the fragment, not the full molecule).
+            size: Tuple of (width, height) in pixels.
+
+        Returns:
+            PIL Image of the rendered fragment.
+        """
         _d = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
         _opts = _d.drawOptions()
-        _opts.bondLineWidth = 1.5
-        _d.DrawMolecule(
-            mol,
-            highlightAtoms=_atoms,
-            highlightAtomColors=_acols,
-            highlightBonds=_bonds,
-            highlightBondColors=_bcols,
-        )
+        _opts.bondLineWidth = 2.0
+        _opts.minFontSize = 14
+        _opts.additionalAtomLabelPadding = 0.1
+        _d.DrawMolecule(mol)
         _d.FinishDrawing()
         return Image.open(io.BytesIO(_d.GetDrawingText()))
 
-    # --- Build combined figure ---
-    # Layout: 2 columns
-    #   Left: XGBoost top 15 SHAP bits (horizontal bar + substructure thumbnails)
-    #   Right: Chemprop top 15 atom-type saliency (horizontal bar)
-
-    _n_xgb = min(15, len(xgb_top20_bits))
+    _n_xgb = min(15, len(xgb_top_bits))
     _n_chemprop = min(15, len(chemprop_top_atom_types))
-    _n_rows = max(_n_xgb, _n_chemprop)
 
-    _fig = plt.figure(figsize=(18, 12))
-    _gs = _fig.add_gridspec(1, 2, width_ratios=[1.1, 0.9], wspace=0.35)
+    # --- Build figure: 4 columns ---
+    # [XGB fragment | XGB bar] [Chemprop bar | Chemprop fragment]
+    _fig = plt.figure(figsize=(22, 12))
+    _gs = _fig.add_gridspec(1, 4, width_ratios=[0.3, 0.7, 0.7, 0.3], wspace=0.05)
 
-    # --- Left panel: XGBoost SHAP ---
-    _ax_xgb = _fig.add_subplot(_gs[0])
+    # --- XGBoost substructure images (left of bars) ---
+    _ax_xgb_img = _fig.add_subplot(_gs[0])
+    _ax_xgb_img.set_xlim(0, 1)
+    _ax_xgb_img.set_ylim(-0.5, _n_xgb - 0.5)
+    _ax_xgb_img.invert_yaxis()
+    _ax_xgb_img.axis("off")
 
-    _xgb_bits = xgb_top20_bits[:_n_xgb]
+    _xgb_bits = xgb_top_bits[:_n_xgb]
+
+    for _j, _bit in enumerate(_xgb_bits):
+        if int(_bit) in xgb_bit_to_fragment:
+            _frag = xgb_bit_to_fragment[int(_bit)]
+            try:
+                _img = _draw_fragment(_frag, size=(200, 150))
+                _inset = _ax_xgb_img.inset_axes(
+                    [0.0, _j / _n_xgb, 1.0, 0.9 / _n_xgb],
+                    transform=_ax_xgb_img.transAxes,
+                )
+                _inset.imshow(_img)
+                _inset.axis("off")
+            except Exception:
+                pass
+
+    # --- XGBoost SHAP bars ---
+    _ax_xgb = _fig.add_subplot(_gs[1])
+
     _xgb_labels = []
     _xgb_vals = []
     _xgb_colors = []
@@ -473,39 +498,15 @@ def _(
         _signed_val = float(xgb_mean_signed_shap[_bit])
         _xgb_vals.append(_abs_val)
         _xgb_labels.append(f"Bit {_bit}")
-        # Color by direction: blue = pushes toward stable, red = toward unstable
         if _signed_val > 0:
-            _xgb_colors.append("#2196F3")  # blue: stable
+            _xgb_colors.append("#2196F3")
         else:
-            _xgb_colors.append("#FF5722")  # red: unstable
+            _xgb_colors.append("#FF5722")
 
     _y_pos = np.arange(_n_xgb)
     _ax_xgb.barh(
         _y_pos, _xgb_vals, color=_xgb_colors, alpha=0.8, height=0.7, edgecolor="none"
     )
-
-    # Add substructure thumbnails as insets
-    _gen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
-    for _j, _bit in enumerate(_xgb_bits):
-        if _bit in xgb_bit_to_example:
-            _mol, _center, _rad = xgb_bit_to_example[_bit]
-            _color = (
-                (0.13, 0.59, 0.95, 0.5)
-                if _xgb_colors[_j] == "#2196F3"
-                else (1.0, 0.34, 0.13, 0.5)
-            )
-            try:
-                _img = _draw_bit_env(_mol, _center, _rad, _color)
-                # Place as inset to the right of each bar
-                _inset_ax = _ax_xgb.inset_axes(
-                    [1.02, (_n_xgb - 1 - _j) / _n_xgb, 0.25, 0.8 / _n_xgb],
-                    transform=_ax_xgb.transAxes,
-                )
-                _inset_ax.imshow(_img)
-                _inset_ax.axis("off")
-            except Exception:
-                pass
-
     _ax_xgb.set_yticks(_y_pos)
     _ax_xgb.set_yticklabels(_xgb_labels, fontsize=9)
     _ax_xgb.set_xlabel("Mean |SHAP value|", fontsize=11)
@@ -516,8 +517,8 @@ def _(
     )
     _ax_xgb.invert_yaxis()
 
-    # --- Right panel: Chemprop atom-type saliency ---
-    _ax_cp = _fig.add_subplot(_gs[1])
+    # --- Chemprop saliency bars ---
+    _ax_cp = _fig.add_subplot(_gs[2])
 
     _cp_types = chemprop_top_atom_types[:_n_chemprop]
     _cp_means = [chemprop_atom_means[k] for k in _cp_types]
@@ -544,6 +545,27 @@ def _(
     )
     _ax_cp.invert_yaxis()
 
+    # --- Chemprop fragment images (right of bars) ---
+    _ax_cp_img = _fig.add_subplot(_gs[3])
+    _ax_cp_img.set_xlim(0, 1)
+    _ax_cp_img.set_ylim(-0.5, _n_chemprop - 0.5)
+    _ax_cp_img.invert_yaxis()
+    _ax_cp_img.axis("off")
+
+    for _j, _atype in enumerate(_cp_types):
+        if _atype in chemprop_atom_type_fragment:
+            _frag = chemprop_atom_type_fragment[_atype]
+            try:
+                _img = _draw_fragment(_frag, size=(200, 150))
+                _inset = _ax_cp_img.inset_axes(
+                    [0.0, _j / _n_chemprop, 1.0, 0.9 / _n_chemprop],
+                    transform=_ax_cp_img.transAxes,
+                )
+                _inset.imshow(_img)
+                _inset.axis("off")
+            except Exception:
+                pass
+
     _fig.suptitle(
         "HLM Stability: Feature Importance by Architecture",
         fontsize=14,
@@ -562,23 +584,20 @@ def _(
             mo.as_html(_fig),
             mo.md(f"""
     **Left panel (XGBoost):** Top 15 Morgan fingerprint bits by mean
-    absolute SHAP value on HLM test molecules. Blue bars indicate bits
-    whose presence pushes toward "stable" (active class); red bars push
-    toward "unstable." Inset substructure thumbnails show an example
-    molecule with the fingerprint environment highlighted.
+    absolute SHAP value on HLM test molecules. Blue bars push toward
+    "stable" (active class); red bars push toward "unstable." Fragment
+    images to the left show the extracted substructure corresponding to
+    each fingerprint bit environment -- not the full molecule, just the
+    Morgan radius-3 neighborhood that activates the bit.
 
     **Right panel (Chemprop):** Top 15 atom types by mean normalized
-    gradient saliency (`|dPred/dAtomFeatures|`) across 100 sampled HLM
-    test molecules. Atom types are labeled by element, aromaticity, and
-    degree. Error bars show standard error of the mean.
+    gradient saliency across 100 sampled HLM test molecules. Fragment
+    images to the right show a representative 2-bond neighborhood for
+    each atom type. Error bars show standard error of the mean.
 
-    Both architectures attend to aromatic carbon environments and
-    heteroatom-containing functional groups -- the structural features
-    known to govern CYP-mediated metabolic stability. This convergence
-    across fundamentally different model types (tree ensemble on fixed
-    fingerprints vs. message-passing neural network on molecular graphs)
-    suggests both learn genuine structure-activity rules rather than
-    dataset-specific artifacts.
+    Both architectures attend to nitrogen-containing environments and
+    heteroatom functional groups -- the structural features known to
+    govern CYP-mediated metabolic stability.
 
     Figure saved to `{_save_path}`.
             """),

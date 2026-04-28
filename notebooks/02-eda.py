@@ -63,29 +63,33 @@ def _(ENDPOINT_NAMES, datasets: "dict[str, pl.DataFrame]", mo, pl):
         _n_censored = _df.filter(pl.col("continuous_value_censored")).height
         _n_active = _df.filter(pl.col("binary_label") == 1).height
         _n_inactive = _df.filter(pl.col("binary_label") == 0).height
-        _summary_rows.append({
-            "endpoint": ENDPOINT_NAMES[_key],
-            "total_compounds": _n_total,
-            "has_continuous_value": _n_with_cont,
-            "censored_values": _n_censored,
-            "active": _n_active,
-            "inactive": _n_inactive,
-            "pct_active": round(_n_active / _n_total * 100, 1),
-        })
+        _summary_rows.append(
+            {
+                "endpoint": ENDPOINT_NAMES[_key],
+                "total_compounds": _n_total,
+                "has_continuous_value": _n_with_cont,
+                "censored_values": _n_censored,
+                "active": _n_active,
+                "inactive": _n_inactive,
+                "pct_active": round(_n_active / _n_total * 100, 1),
+            }
+        )
 
     _summary_df = pl.DataFrame(_summary_rows)
 
-    mo.vstack([
-        mo.md("## Dataset Overview"),
-        mo.ui.table(_summary_df),
-        mo.md("""
+    mo.vstack(
+        [
+            mo.md("## Dataset Overview"),
+            mo.ui.table(_summary_df),
+            mo.md("""
     **Notes:**
     - RLM/HLM: *active* = stable (t1/2 > 30 min). RLM is heavily imbalanced toward unstable.
     - PAMPA: *active* = moderate/high permeability (> 10 x10^-6 cm/s). Most compounds are permeable.
     - Censored values: RLM has 754 compounds with t1/2 reported as ">30" (capped at assay limit).
       PAMPA has 483 with permeability ">1000".
         """),
-    ])
+        ]
+    )
     return
 
 
@@ -94,10 +98,14 @@ def _(ENDPOINT_NAMES, datasets: "dict[str, pl.DataFrame]", mo, pl, plt):
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
     for _i, (_key, _df) in enumerate(datasets.items()):
-        _vals = _df.filter(
-            pl.col("continuous_value").is_not_null()
-            & ~pl.col("continuous_value_censored")
-        ).get_column("continuous_value").to_list()
+        _vals = (
+            _df.filter(
+                pl.col("continuous_value").is_not_null()
+                & ~pl.col("continuous_value_censored")
+            )
+            .get_column("continuous_value")
+            .to_list()
+        )
 
         axes[_i].hist(_vals, bins=50, edgecolor="black", alpha=0.7)
         axes[_i].set_title(ENDPOINT_NAMES[_key])
@@ -108,11 +116,15 @@ def _(ENDPOINT_NAMES, datasets: "dict[str, pl.DataFrame]", mo, pl, plt):
 
     fig.suptitle("Distribution of Continuous Values (uncensored only)", fontsize=14)
     plt.tight_layout()
-    mo.vstack([
-        mo.md("## Continuous Value Distributions"),
-        mo.as_html(fig),
-        mo.md("Censored values (e.g., >30 for RLM, >1000 for PAMPA) are excluded from these histograms."),
-    ])
+    mo.vstack(
+        [
+            mo.md("## Continuous Value Distributions"),
+            mo.as_html(fig),
+            mo.md(
+                "Censored values (e.g., >30 for RLM, >1000 for PAMPA) are excluded from these histograms."
+            ),
+        ]
+    )
     return
 
 
@@ -135,15 +147,17 @@ def _(ENDPOINT_NAMES, datasets: "dict[str, pl.DataFrame]", mo, pl, plt):
 
     _fig2.suptitle("Class Balance", fontsize=14)
     plt.tight_layout()
-    mo.vstack([
-        mo.md("## Class Balance"),
-        mo.as_html(_fig2),
-        mo.md("""
+    mo.vstack(
+        [
+            mo.md("## Class Balance"),
+            mo.as_html(_fig2),
+            mo.md("""
     - **RLM**: heavily skewed toward *unstable* (70% inactive). Pre-training source.
     - **HLM**: more balanced (60% active / 40% inactive). Related finetune target.
     - **PAMPA**: heavily skewed toward *permeable* (86% active). Unrelated finetune target.
         """),
-    ])
+        ]
+    )
     return
 
 
@@ -175,17 +189,25 @@ def _(Chem, MurckoScaffold, datasets: "dict[str, pl.DataFrame]", pl):
     for _a, _b in _pairs:
         _shared_smiles = smiles_sets[_a] & smiles_sets[_b]
         _shared_scaffolds = scaffold_sets[_a] & scaffold_sets[_b]
-        _overlap_rows.append({
-            "pair": f"{_a.upper()} ∩ {_b.upper()}",
-            "shared_molecules": len(_shared_smiles),
-            "pct_of_smaller": round(
-                len(_shared_smiles) / min(len(smiles_sets[_a]), len(smiles_sets[_b])) * 100, 1
-            ),
-            "shared_scaffolds": len(_shared_scaffolds),
-            "pct_scaffolds_of_smaller": round(
-                len(_shared_scaffolds) / min(len(scaffold_sets[_a]), len(scaffold_sets[_b])) * 100, 1
-            ),
-        })
+        _overlap_rows.append(
+            {
+                "pair": f"{_a.upper()} ∩ {_b.upper()}",
+                "shared_molecules": len(_shared_smiles),
+                "pct_of_smaller": round(
+                    len(_shared_smiles)
+                    / min(len(smiles_sets[_a]), len(smiles_sets[_b]))
+                    * 100,
+                    1,
+                ),
+                "shared_scaffolds": len(_shared_scaffolds),
+                "pct_scaffolds_of_smaller": round(
+                    len(_shared_scaffolds)
+                    / min(len(scaffold_sets[_a]), len(scaffold_sets[_b]))
+                    * 100,
+                    1,
+                ),
+            }
+        )
 
     overlap_df = pl.DataFrame(_overlap_rows)
     return overlap_df, smiles_sets
@@ -193,10 +215,11 @@ def _(Chem, MurckoScaffold, datasets: "dict[str, pl.DataFrame]", pl):
 
 @app.cell(hide_code=True)
 def _(mo, overlap_df):
-    mo.vstack([
-        mo.md("## Molecule and Scaffold Overlap"),
-        mo.ui.table(overlap_df),
-        mo.md("""
+    mo.vstack(
+        [
+            mo.md("## Molecule and Scaffold Overlap"),
+            mo.ui.table(overlap_df),
+            mo.md("""
     Overlap is computed on canonical SMILES (exact structure match) and
     Bemis-Murcko scaffolds (core ring systems). The "pct of smaller" column
     shows overlap as a percentage of the smaller dataset in each pair.
@@ -205,7 +228,8 @@ def _(mo, overlap_df):
     when exact molecule overlap is limited — relevant context for interpreting
     transfer learning results.
         """),
-    ])
+        ]
+    )
     return
 
 
@@ -232,7 +256,9 @@ def _(ENDPOINT_NAMES, mo, np, plt, smiles_sets: dict[str, set[str]]):
         for _j in range(_n):
             _val = _overlap_matrix[_i, _j]
             _color = "white" if _val > _overlap_matrix.max() * 0.6 else "black"
-            _ax_cm.text(_j, _i, f"{_val:,}", ha="center", va="center", color=_color, fontsize=13)
+            _ax_cm.text(
+                _j, _i, f"{_val:,}", ha="center", va="center", color=_color, fontsize=13
+            )
 
     _ax_cm.set_xticks(range(_n))
     _ax_cm.set_yticks(range(_n))
@@ -242,30 +268,48 @@ def _(ENDPOINT_NAMES, mo, np, plt, smiles_sets: dict[str, set[str]]):
     plt.colorbar(_im, ax=_ax_cm, label="Count")
     plt.tight_layout()
 
-    mo.vstack([
-        mo.md("### Molecule Overlap Matrix"),
-        mo.as_html(_fig_cm),
-        mo.md("""
+    mo.vstack(
+        [
+            mo.md("### Molecule Overlap Matrix"),
+            mo.as_html(_fig_cm),
+            mo.md("""
     Diagonal: total unique molecules per endpoint. Off-diagonal: number of
     molecules shared between each pair. RLM and PAMPA share nearly all
     molecules (same compound library). HLM has minimal overlap with either.
         """),
-    ])
+        ]
+    )
     return
 
 
 @app.cell(hide_code=True)
 def _(datasets: "dict[str, pl.DataFrame]", mo, pl, plt):
     # Correlation of continuous values for shared compounds
-    _rlm = datasets["rlm"].select("canonical_smiles", "continuous_value", "continuous_value_censored", "binary_label")
-    _pampa = datasets["pampa"].select("canonical_smiles", "continuous_value", "continuous_value_censored", "binary_label")
-    _hlm = datasets["hlm"].select("canonical_smiles", "continuous_value", "continuous_value_censored", "binary_label")
+    _rlm = datasets["rlm"].select(
+        "canonical_smiles",
+        "continuous_value",
+        "continuous_value_censored",
+        "binary_label",
+    )
+    _pampa = datasets["pampa"].select(
+        "canonical_smiles",
+        "continuous_value",
+        "continuous_value_censored",
+        "binary_label",
+    )
+    _hlm = datasets["hlm"].select(
+        "canonical_smiles",
+        "continuous_value",
+        "continuous_value_censored",
+        "binary_label",
+    )
 
     # RLM vs PAMPA (large overlap)
     _rlm_pampa = _rlm.join(_pampa, on="canonical_smiles", suffix="_pampa")
     # Filter to uncensored in both
     _rlm_pampa_unc = _rlm_pampa.filter(
-        ~pl.col("continuous_value_censored") & ~pl.col("continuous_value_censored_pampa")
+        ~pl.col("continuous_value_censored")
+        & ~pl.col("continuous_value_censored_pampa")
     )
 
     # RLM vs HLM (small overlap, but let's show it)
@@ -274,13 +318,18 @@ def _(datasets: "dict[str, pl.DataFrame]", mo, pl, plt):
         ~pl.col("continuous_value_censored") & ~pl.col("continuous_value_censored_hlm")
     )
 
+    _FIGURES_DIR = __import__("pathlib").Path("docs/figures")
+    _FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+
+    # --- Combined figure (kept for backward compat) ---
     _fig3, (_ax_a, _ax_b) = plt.subplots(1, 2, figsize=(12, 5))
 
     # RLM vs PAMPA
     _ax_a.scatter(
         _rlm_pampa_unc.get_column("continuous_value").to_list(),
         _rlm_pampa_unc.get_column("continuous_value_pampa").to_list(),
-        alpha=0.3, s=10,
+        alpha=0.3,
+        s=10,
     )
     _ax_a.set_xlabel("RLM Half-life (min)")
     _ax_a.set_ylabel("PAMPA Permeability (x10⁻⁶ cm/s)")
@@ -291,62 +340,142 @@ def _(datasets: "dict[str, pl.DataFrame]", mo, pl, plt):
         _ax_b.scatter(
             _rlm_hlm_unc.get_column("continuous_value").to_list(),
             _rlm_hlm_unc.get_column("continuous_value_hlm").to_list(),
-            alpha=0.5, s=20,
+            alpha=0.5,
+            s=20,
         )
         _ax_b.set_xlabel("RLM Half-life (min)")
         _ax_b.set_ylabel("HLM Half-life (min)")
         _ax_b.set_title(f"RLM vs HLM (n={_rlm_hlm_unc.height} shared, uncensored)")
     else:
-        _ax_b.text(0.5, 0.5, "No shared uncensored compounds", ha="center", va="center", transform=_ax_b.transAxes)
+        _ax_b.text(
+            0.5,
+            0.5,
+            "No shared uncensored compounds",
+            ha="center",
+            va="center",
+            transform=_ax_b.transAxes,
+        )
         _ax_b.set_title("RLM vs HLM")
 
     plt.tight_layout()
+    _fig3.savefig(
+        _FIGURES_DIR / "eda-correlation-scatter.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor="white",
+    )
 
-    mo.vstack([
-        mo.md("## Correlation of Shared Compounds"),
-        mo.as_html(_fig3),
-        mo.md(f"""
+    # --- Individual figures for README sections ---
+    # RLM vs HLM only
+    _fig_hlm, _ax_hlm = plt.subplots(figsize=(6, 5))
+    if _rlm_hlm_unc.height > 0:
+        _ax_hlm.scatter(
+            _rlm_hlm_unc.get_column("continuous_value").to_list(),
+            _rlm_hlm_unc.get_column("continuous_value_hlm").to_list(),
+            alpha=0.5,
+            s=20,
+            color="#2196F3",
+        )
+    _ax_hlm.set_xlabel("RLM Half-life (min)")
+    _ax_hlm.set_ylabel("HLM Half-life (min)")
+    _ax_hlm.set_title(f"RLM vs HLM (n={_rlm_hlm_unc.height} shared, uncensored)")
+    _fig_hlm.tight_layout()
+    _fig_hlm.savefig(
+        _FIGURES_DIR / "eda-correlation-rlm-hlm.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor="white",
+    )
+    plt.close(_fig_hlm)
+
+    # RLM vs PAMPA only
+    _fig_pampa, _ax_pampa = plt.subplots(figsize=(6, 5))
+    _ax_pampa.scatter(
+        _rlm_pampa_unc.get_column("continuous_value").to_list(),
+        _rlm_pampa_unc.get_column("continuous_value_pampa").to_list(),
+        alpha=0.3,
+        s=10,
+        color="#FF5722",
+    )
+    _ax_pampa.set_xlabel("RLM Half-life (min)")
+    _ax_pampa.set_ylabel("PAMPA Permeability (x10⁻⁶ cm/s)")
+    _ax_pampa.set_title(f"RLM vs PAMPA (n={_rlm_pampa_unc.height} shared, uncensored)")
+    _fig_pampa.tight_layout()
+    _fig_pampa.savefig(
+        _FIGURES_DIR / "eda-correlation-rlm-pampa.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor="white",
+    )
+    plt.close(_fig_pampa)
+
+    mo.vstack(
+        [
+            mo.md("## Correlation of Shared Compounds"),
+            mo.as_html(_fig3),
+            mo.md(f"""
     - **RLM vs PAMPA**: {_rlm_pampa_unc.height} shared uncensored compounds. These are mechanistically
       unrelated endpoints (metabolic stability vs membrane permeability), so we expect low correlation.
     - **RLM vs HLM**: {_rlm_hlm_unc.height} shared uncensored compounds. Small overlap, but both measure
       microsomal stability so we'd expect positive correlation for the compounds that do overlap.
         """),
-    ])
+        ]
+    )
     return
 
 
 @app.cell(hide_code=True)
 def _(datasets: "dict[str, pl.DataFrame]", mo, pl):
     # Binary label agreement for RLM vs PAMPA (large overlap)
-    _rlm_p = datasets["rlm"].select("canonical_smiles", pl.col("binary_label").alias("rlm_label"))
-    _pampa_p = datasets["pampa"].select("canonical_smiles", pl.col("binary_label").alias("pampa_label"))
+    _rlm_p = datasets["rlm"].select(
+        "canonical_smiles", pl.col("binary_label").alias("rlm_label")
+    )
+    _pampa_p = datasets["pampa"].select(
+        "canonical_smiles", pl.col("binary_label").alias("pampa_label")
+    )
     _merged = _rlm_p.join(_pampa_p, on="canonical_smiles").filter(
         pl.col("rlm_label").is_not_null() & pl.col("pampa_label").is_not_null()
     )
 
-    _both_active = _merged.filter((pl.col("rlm_label") == 1) & (pl.col("pampa_label") == 1)).height
-    _both_inactive = _merged.filter((pl.col("rlm_label") == 0) & (pl.col("pampa_label") == 0)).height
-    _rlm_only = _merged.filter((pl.col("rlm_label") == 1) & (pl.col("pampa_label") == 0)).height
-    _pampa_only = _merged.filter((pl.col("rlm_label") == 0) & (pl.col("pampa_label") == 1)).height
-    _agreement = round((_both_active + _both_inactive) / _merged.height * 100, 1) if _merged.height > 0 else 0
+    _both_active = _merged.filter(
+        (pl.col("rlm_label") == 1) & (pl.col("pampa_label") == 1)
+    ).height
+    _both_inactive = _merged.filter(
+        (pl.col("rlm_label") == 0) & (pl.col("pampa_label") == 0)
+    ).height
+    _rlm_only = _merged.filter(
+        (pl.col("rlm_label") == 1) & (pl.col("pampa_label") == 0)
+    ).height
+    _pampa_only = _merged.filter(
+        (pl.col("rlm_label") == 0) & (pl.col("pampa_label") == 1)
+    ).height
+    _agreement = (
+        round((_both_active + _both_inactive) / _merged.height * 100, 1)
+        if _merged.height > 0
+        else 0
+    )
 
-    _confusion = pl.DataFrame({
-        "": ["RLM Active (stable)", "RLM Inactive (unstable)"],
-        "PAMPA Active (permeable)": [_both_active, _pampa_only],
-        "PAMPA Inactive (impermeable)": [_rlm_only, _both_inactive],
-    })
+    _confusion = pl.DataFrame(
+        {
+            "": ["RLM Active (stable)", "RLM Inactive (unstable)"],
+            "PAMPA Active (permeable)": [_both_active, _pampa_only],
+            "PAMPA Inactive (impermeable)": [_rlm_only, _both_inactive],
+        }
+    )
 
-    mo.vstack([
-        mo.md("## Binary Label Agreement (RLM vs PAMPA, shared compounds)"),
-        mo.ui.table(_confusion),
-        mo.md(f"""
+    mo.vstack(
+        [
+            mo.md("## Binary Label Agreement (RLM vs PAMPA, shared compounds)"),
+            mo.ui.table(_confusion),
+            mo.md(f"""
     Label agreement: **{_agreement}%** across {_merged.height} shared compounds.
 
     Since RLM measures metabolic stability and PAMPA measures permeability, low agreement
     is expected — a compound can be metabolically stable but impermeable, or vice versa.
     This confirms that RLM→PAMPA transfer is genuinely "unrelated" from a biological mechanism standpoint.
         """),
-    ])
+        ]
+    )
     return
 
 
@@ -376,9 +505,7 @@ def _(
     # Collect all unique SMILES across all endpoints
     _all_smiles_frames = []
     for _key, _df in datasets.items():
-        _all_smiles_frames.append(
-            _df.select("canonical_smiles").unique()
-        )
+        _all_smiles_frames.append(_df.select("canonical_smiles").unique())
     all_smiles_df = pl.concat(_all_smiles_frames).unique()
     logger.info(f"Total unique molecules across all endpoints: {all_smiles_df.height}")
 
@@ -405,12 +532,17 @@ def _(
     logger.info(f"Fingerprint matrix shape: {fp_matrix.shape}")
 
     # PaCMAP embedding to 2D
-    pacmap_model = pacmap.PaCMAP(n_components=2, n_neighbors=10, MN_ratio=0.5, FP_ratio=2.0, random_state=42)
+    pacmap_model = pacmap.PaCMAP(
+        n_components=2, n_neighbors=10, MN_ratio=0.5, FP_ratio=2.0, random_state=42
+    )
     embedding_2d = pacmap_model.fit_transform(fp_matrix.astype(np.float32))
     logger.info(f"PaCMAP embedding shape: {embedding_2d.shape}")
 
     # Build a lookup from SMILES -> (x, y) coordinates
-    smiles_to_xy = {smi: (embedding_2d[i, 0], embedding_2d[i, 1]) for i, smi in enumerate(_valid_smiles)}
+    smiles_to_xy = {
+        smi: (embedding_2d[i, 0], embedding_2d[i, 1])
+        for i, smi in enumerate(_valid_smiles)
+    }
     return all_smiles_df, embedding_2d, fp_matrix, smiles_to_xy
 
 
@@ -458,8 +590,13 @@ def _(
             if _mask.any():
                 _label_text = _label_names_map[_key][_label_val]
                 _axes_scat[_i].scatter(
-                    _xs_arr[_mask], _ys_arr[_mask],
-                    c=_color, s=4, alpha=0.4, label=_label_text, rasterized=True,
+                    _xs_arr[_mask],
+                    _ys_arr[_mask],
+                    c=_color,
+                    s=4,
+                    alpha=0.4,
+                    label=_label_text,
+                    rasterized=True,
                 )
 
         _axes_scat[_i].set_xlim(_xlim)
@@ -469,18 +606,22 @@ def _(
         _axes_scat[_i].set_ylabel("PaCMAP 2")
         _axes_scat[_i].legend(markerscale=3, fontsize=9)
 
-    _fig_scat.suptitle("Chemical Space (Morgan FP → PaCMAP) Colored by Label", fontsize=14)
+    _fig_scat.suptitle(
+        "Chemical Space (Morgan FP → PaCMAP) Colored by Label", fontsize=14
+    )
     plt.tight_layout()
 
-    mo.vstack([
-        mo.md("## PaCMAP Embedding — Label Scatter Plots"),
-        mo.as_html(_fig_scat),
-        mo.md("""
+    mo.vstack(
+        [
+            mo.md("## PaCMAP Embedding — Label Scatter Plots"),
+            mo.as_html(_fig_scat),
+            mo.md("""
     Each point is a molecule embedded via PaCMAP from 2048-bit Morgan fingerprints (radius 3).
     All three panels share the same coordinate axes — a single embedding computed across all
     molecules from all endpoints. Colors indicate the binary classification label.
         """),
-    ])
+        ]
+    )
     return
 
 
@@ -518,8 +659,12 @@ def _(
             _ax = _axes_hex[_row][_col]
             if len(_xs) > 0:
                 _hb = _ax.hexbin(
-                    _xs, _ys, gridsize=25, cmap=_row_colors[_label_val],
-                    mincnt=1, edgecolors="none",
+                    _xs,
+                    _ys,
+                    gridsize=25,
+                    cmap=_row_colors[_label_val],
+                    mincnt=1,
+                    edgecolors="none",
                     extent=(*_xlim_hex, *_ylim_hex),
                 )
                 plt.colorbar(_hb, ax=_ax, label="Count")
@@ -539,16 +684,18 @@ def _(
     _fig_hex.suptitle("Hexbin Density by Label in PaCMAP Space", fontsize=14, y=1.01)
     plt.tight_layout()
 
-    mo.vstack([
-        mo.md("## PaCMAP Embedding — Hexbin Density by Label"),
-        mo.as_html(_fig_hex),
-        mo.md("""
+    mo.vstack(
+        [
+            mo.md("## PaCMAP Embedding — Hexbin Density by Label"),
+            mo.as_html(_fig_hex),
+            mo.md("""
     Top row: active (stable / permeable) compounds. Bottom row: inactive.
     All panels share the same coordinate axes from the single shared PaCMAP embedding.
     Density differences between the two rows reveal regions of chemical space
     enriched for one class — structure-activity relationships that ML models can exploit.
         """),
-    ])
+        ]
+    )
     return
 
 
@@ -612,25 +759,37 @@ def _(
         # Map to global embedding indices
         _idxs = [_global_smi_to_idx[s] for s in _smiles if s in _global_smi_to_idx]
         _valid_smiles = [s for s in _smiles if s in _global_smi_to_idx]
-        _valid_labels = [_labels[i] for i, s in enumerate(_smiles) if s in _global_smi_to_idx]
+        _valid_labels = [
+            _labels[i] for i, s in enumerate(_smiles) if s in _global_smi_to_idx
+        ]
         _emb = embedding_2d[_idxs]
         _fps_idx = _idxs  # indices into global fp_matrix
 
         # KMeans on PaCMAP embedding
-        _kmeans = KMeans(n_clusters=min(N_CLUSTERS, len(_valid_smiles) // 3), random_state=42, n_init=10)
+        _kmeans = KMeans(
+            n_clusters=min(N_CLUSTERS, len(_valid_smiles) // 3),
+            random_state=42,
+            n_init=10,
+        )
         _cluster_labels = _kmeans.fit_predict(_emb)
-        logger.info(f"{_key}: {len(set(_cluster_labels))} clusters from {len(_valid_smiles)} molecules")
+        logger.info(
+            f"{_key}: {len(set(_cluster_labels))} clusters from {len(_valid_smiles)} molecules"
+        )
 
         # Generate all fold assignments
         _all_folds = []
         for _rep in range(N_REPLICATES):
-            _gkf = GroupKFoldShuffle(n_splits=N_FOLDS, shuffle=True, random_state=_rep * 100)
+            _gkf = GroupKFoldShuffle(
+                n_splits=N_FOLDS, shuffle=True, random_state=_rep * 100
+            )
             _fold_assignment = np.full(len(_valid_smiles), -1, dtype=np.int8)
-            for _fold_idx, (_train_idx, _test_idx) in enumerate(_gkf.split(
-                np.arange(len(_valid_smiles)),
-                np.array(_valid_labels),
-                groups=_cluster_labels,
-            )):
+            for _fold_idx, (_train_idx, _test_idx) in enumerate(
+                _gkf.split(
+                    np.arange(len(_valid_smiles)),
+                    np.array(_valid_labels),
+                    groups=_cluster_labels,
+                )
+            ):
                 _fold_assignment[_test_idx] = _fold_idx
             _all_folds.append(_fold_assignment)
 
@@ -738,7 +897,9 @@ def _(
             _train_fps = [_fps[i] for i in range(len(_fps)) if _train_mask[i]]
 
             # Cross-fold: 5-NN distances from test to training
-            _cross_dists = compute_knn_tanimoto_distances(_test_fps, _train_fps, K_NEIGHBORS)
+            _cross_dists = compute_knn_tanimoto_distances(
+                _test_fps, _train_fps, K_NEIGHBORS
+            )
             # Within-fold: 5-NN distances from test to other test molecules (exclude self)
             _within_result = np.zeros((len(_test_fps), K_NEIGHBORS))
             for _i, _qfp in enumerate(_test_fps):
@@ -751,20 +912,24 @@ def _(
 
             for _i in range(len(_test_fps)):
                 for _j in range(K_NEIGHBORS):
-                    fold_quality_data.append({
-                        "endpoint": ENDPOINT_NAMES[_key],
-                        "fold": _fold_idx,
-                        "comparison": "cross-fold (test to train)",
-                        "nn_rank": _j + 1,
-                        "tanimoto_distance": _cross_dists[_i, _j],
-                    })
-                    fold_quality_data.append({
-                        "endpoint": ENDPOINT_NAMES[_key],
-                        "fold": _fold_idx,
-                        "comparison": "within-fold (test to test)",
-                        "nn_rank": _j + 1,
-                        "tanimoto_distance": _within_result[_i, _j],
-                    })
+                    fold_quality_data.append(
+                        {
+                            "endpoint": ENDPOINT_NAMES[_key],
+                            "fold": _fold_idx,
+                            "comparison": "cross-fold (test to train)",
+                            "nn_rank": _j + 1,
+                            "tanimoto_distance": _cross_dists[_i, _j],
+                        }
+                    )
+                    fold_quality_data.append(
+                        {
+                            "endpoint": ENDPOINT_NAMES[_key],
+                            "fold": _fold_idx,
+                            "comparison": "within-fold (test to test)",
+                            "nn_rank": _j + 1,
+                            "tanimoto_distance": _within_result[_i, _j],
+                        }
+                    )
 
     fold_quality_df = pl.DataFrame(fold_quality_data)
     logger.info(f"Fold quality data: {fold_quality_df.height} rows")
@@ -781,24 +946,47 @@ def _(fold_quality_df, mo, pl, plt):
 
     for _i, _target in enumerate(_all_endpoints):
         _subset = _fq_pd[_fq_pd["endpoint"] == _target]
-        _within = _subset[_subset["comparison"] == "within-fold (test to test)"]["tanimoto_distance"]
-        _cross = _subset[_subset["comparison"] == "cross-fold (test to train)"]["tanimoto_distance"]
+        _within = _subset[_subset["comparison"] == "within-fold (test to test)"][
+            "tanimoto_distance"
+        ]
+        _cross = _subset[_subset["comparison"] == "cross-fold (test to train)"][
+            "tanimoto_distance"
+        ]
 
-        _axes_fq[_i].hist(_within, bins=50, alpha=0.6, label="Within fold", color="#2196F3", density=True)
-        _axes_fq[_i].hist(_cross, bins=50, alpha=0.6, label="Cross fold", color="#FF5722", density=True)
+        _axes_fq[_i].hist(
+            _within,
+            bins=50,
+            alpha=0.6,
+            label="Within fold",
+            color="#2196F3",
+            density=True,
+        )
+        _axes_fq[_i].hist(
+            _cross,
+            bins=50,
+            alpha=0.6,
+            label="Cross fold",
+            color="#FF5722",
+            density=True,
+        )
         _axes_fq[_i].set_title(_target)
         _axes_fq[_i].set_xlabel("Tanimoto Distance (1 - similarity)")
         _axes_fq[_i].set_ylabel("Density" if _i == 0 else "")
         _axes_fq[_i].legend()
-        _axes_fq[_i].axvline(_within.median(), color="#2196F3", linestyle="--", alpha=0.8)
-        _axes_fq[_i].axvline(_cross.median(), color="#FF5722", linestyle="--", alpha=0.8)
+        _axes_fq[_i].axvline(
+            _within.median(), color="#2196F3", linestyle="--", alpha=0.8
+        )
+        _axes_fq[_i].axvline(
+            _cross.median(), color="#FF5722", linestyle="--", alpha=0.8
+        )
 
-    _fig_fq.suptitle("5-NN Tanimoto Distance: Within-Fold vs Cross-Fold (Replicate 0)", fontsize=14)
+    _fig_fq.suptitle(
+        "5-NN Tanimoto Distance: Within-Fold vs Cross-Fold (Replicate 0)", fontsize=14
+    )
     plt.tight_layout()
 
     _fq_summary = (
-        fold_quality_df
-        .group_by("endpoint", "comparison")
+        fold_quality_df.group_by("endpoint", "comparison")
         .agg(
             pl.col("tanimoto_distance").median().alias("median"),
             pl.col("tanimoto_distance").mean().alias("mean"),
@@ -808,17 +996,21 @@ def _(fold_quality_df, mo, pl, plt):
         .sort("endpoint", "comparison")
     )
 
-    mo.vstack([
-        mo.md("### Chemical Distinctness: Within-Fold vs Cross-Fold 5-NN Distances"),
-        mo.as_html(_fig_fq),
-        mo.ui.table(_fq_summary),
-        mo.md("""
+    mo.vstack(
+        [
+            mo.md(
+                "### Chemical Distinctness: Within-Fold vs Cross-Fold 5-NN Distances"
+            ),
+            mo.as_html(_fig_fq),
+            mo.ui.table(_fq_summary),
+            mo.md("""
     Dashed lines show medians. If splits are working well, cross-fold
     distances (red) should be shifted right of within-fold distances (blue)
     -- molecules are more chemically distant from the training set than
     from other molecules in their own test fold.
         """),
-    ])
+        ]
+    )
     return
 
 
@@ -854,14 +1046,16 @@ def _(
                             _max_jaccard = _jaccard
                             _best_fold_b = _fold_b
                     _best_jaccards.append(_max_jaccard)
-                    _rep_overlap_rows.append({
-                        "endpoint": ENDPOINT_NAMES[_key],
-                        "rep_a": _rep_a,
-                        "rep_b": _rep_b,
-                        "fold_in_a": _fold_a,
-                        "best_match_fold_in_b": _best_fold_b,
-                        "best_jaccard": _max_jaccard,
-                    })
+                    _rep_overlap_rows.append(
+                        {
+                            "endpoint": ENDPOINT_NAMES[_key],
+                            "rep_a": _rep_a,
+                            "rep_b": _rep_b,
+                            "fold_in_a": _fold_a,
+                            "best_match_fold_in_b": _best_fold_b,
+                            "best_jaccard": _max_jaccard,
+                        }
+                    )
 
                 _mean_j = np.mean(_best_jaccards)
                 logger.info(
@@ -882,20 +1076,32 @@ def _(mo, pl, plt, rep_overlap_df):
 
     for _i, _target in enumerate(_all_endpoints):
         _subset = _rep_pd[_rep_pd["endpoint"] == _target]
-        _axes_rep[_i].hist(_subset["best_jaccard"], bins=20, edgecolor="black", alpha=0.7, color="#7E57C2")
-        _axes_rep[_i].axvline(_subset["best_jaccard"].mean(), color="red", linestyle="--", label=f'Mean = {_subset["best_jaccard"].mean():.3f}')
+        _axes_rep[_i].hist(
+            _subset["best_jaccard"],
+            bins=20,
+            edgecolor="black",
+            alpha=0.7,
+            color="#7E57C2",
+        )
+        _axes_rep[_i].axvline(
+            _subset["best_jaccard"].mean(),
+            color="red",
+            linestyle="--",
+            label=f"Mean = {_subset['best_jaccard'].mean():.3f}",
+        )
         _axes_rep[_i].set_title(_target)
         _axes_rep[_i].set_xlabel("Best-Match Jaccard Overlap")
         _axes_rep[_i].set_ylabel("Count" if _i == 0 else "")
         _axes_rep[_i].set_xlim(0, 1)
         _axes_rep[_i].legend()
 
-    _fig_rep.suptitle("Replicate Variation: Best-Match Fold Overlap Across Replicates", fontsize=14)
+    _fig_rep.suptitle(
+        "Replicate Variation: Best-Match Fold Overlap Across Replicates", fontsize=14
+    )
     plt.tight_layout()
 
     _rep_summary = (
-        rep_overlap_df
-        .group_by("endpoint")
+        rep_overlap_df.group_by("endpoint")
         .agg(
             pl.col("best_jaccard").mean().alias("mean_best_jaccard"),
             pl.col("best_jaccard").std().alias("std_best_jaccard"),
@@ -905,11 +1111,12 @@ def _(mo, pl, plt, rep_overlap_df):
         .sort("endpoint")
     )
 
-    mo.vstack([
-        mo.md("### Replicate Variation: Best-Match Fold Overlap"),
-        mo.as_html(_fig_rep),
-        mo.ui.table(_rep_summary),
-        mo.md("""
+    mo.vstack(
+        [
+            mo.md("### Replicate Variation: Best-Match Fold Overlap"),
+            mo.as_html(_fig_rep),
+            mo.ui.table(_rep_summary),
+            mo.md("""
     For each fold in replicate A, we find the fold in replicate B with the
     highest molecule overlap (Jaccard similarity). Fold indices are arbitrary,
     so this best-match comparison avoids penalizing index permutations.
@@ -918,7 +1125,8 @@ def _(mo, pl, plt, rep_overlap_df):
     different partitions. A mean best-match Jaccard of ~0.2-0.3 means even the
     most similar fold pair across replicates shares only ~20-30% of molecules.
         """),
-    ])
+        ]
+    )
     return
 
 
@@ -945,33 +1153,28 @@ def _(
                 _n_total = _mask.sum()
                 _n_pos = (_labels[_mask] == 1).sum()
                 _n_neg = (_labels[_mask] == 0).sum()
-                _fold_balance_rows.append({
-                    "endpoint": ENDPOINT_NAMES[_key],
-                    "replicate": _rep,
-                    "fold": _fold_idx,
-                    "n_total": int(_n_total),
-                    "n_positive": int(_n_pos),
-                    "n_negative": int(_n_neg),
-                    "pct_positive": round(_n_pos / _n_total * 100, 1) if _n_total > 0 else 0.0,
-                })
+                _fold_balance_rows.append(
+                    {
+                        "endpoint": ENDPOINT_NAMES[_key],
+                        "replicate": _rep,
+                        "fold": _fold_idx,
+                        "n_total": int(_n_total),
+                        "n_positive": int(_n_pos),
+                        "n_negative": int(_n_neg),
+                        "pct_positive": round(_n_pos / _n_total * 100, 1)
+                        if _n_total > 0
+                        else 0.0,
+                    }
+                )
 
     fold_balance_df = pl.DataFrame(_fold_balance_rows)
 
     # Assign rank per endpoint by mean_size
-    _mean_sizes = (
-        fold_balance_df
-        .group_by("endpoint", "fold")
-        .agg(pl.col("n_total").mean().alias("mean_size"))
+    _mean_sizes = fold_balance_df.group_by("endpoint", "fold").agg(
+        pl.col("n_total").mean().alias("mean_size")
     )
-    _ranked = (
-        _mean_sizes
-        .sort("endpoint", "mean_size")
-        .with_columns(
-            pl.col("fold")
-            .cum_count()
-            .over("endpoint")
-            .alias("size_rank")
-        )
+    _ranked = _mean_sizes.sort("endpoint", "mean_size").with_columns(
+        pl.col("fold").cum_count().over("endpoint").alias("size_rank")
     )
     fold_balance_ranked = fold_balance_df.join(
         _ranked.select("endpoint", "fold", "size_rank"),
@@ -992,20 +1195,30 @@ def _(fold_balance_ranked, mo, np, plt):
     for _col, _target in enumerate(_all_endpoints):
         _sub = _fb_pd[_fb_pd["endpoint"] == _target].copy()
 
-        for _row, (_count_col, _label, _color) in enumerate([
-            ("n_positive", "Active", "#2196F3"),
-            ("n_negative", "Inactive", "#FF5722"),
-        ]):
+        for _row, (_count_col, _label, _color) in enumerate(
+            [
+                ("n_positive", "Active", "#2196F3"),
+                ("n_negative", "Inactive", "#FF5722"),
+            ]
+        ):
             _ax = _axes_fb[_row][_col]
 
-            _fold_stats = _sub.groupby("size_rank")[_count_col].agg(["mean", "std"]).reset_index()
+            _fold_stats = (
+                _sub.groupby("size_rank")[_count_col].agg(["mean", "std"]).reset_index()
+            )
             _fold_stats.columns = ["size_rank", "mean", "std"]
             _fold_stats = _fold_stats.sort_values("size_rank")
 
             _x_pos = _fold_stats["size_rank"].values
             _ax.bar(
-                _x_pos, _fold_stats["mean"], yerr=_fold_stats["std"],
-                color=_color, alpha=0.4, capsize=4, edgecolor=_color, linewidth=1.2,
+                _x_pos,
+                _fold_stats["mean"],
+                yerr=_fold_stats["std"],
+                color=_color,
+                alpha=0.4,
+                capsize=4,
+                edgecolor=_color,
+                linewidth=1.2,
                 label="Mean +/- SD",
             )
 
@@ -1013,8 +1226,13 @@ def _(fold_balance_ranked, mo, np, plt):
             _ax.scatter(
                 _sub["size_rank"].values + _jitter,
                 _sub[_count_col].values,
-                color=_color, s=25, alpha=0.7, edgecolor="white", linewidth=0.5,
-                zorder=5, label="Individual replicates",
+                color=_color,
+                s=25,
+                alpha=0.7,
+                edgecolor="white",
+                linewidth=0.5,
+                zorder=5,
+                label="Individual replicates",
             )
 
             _ax.set_xlabel("Fold (sorted by size)" if _row == 1 else "")
@@ -1024,19 +1242,23 @@ def _(fold_balance_ranked, mo, np, plt):
             _ax.set_xticklabels([f"F{int(r)}" for r in _x_pos])
             _ax.legend(fontsize=8)
 
-    _fig_fb.suptitle("Fold Class Balance Across Replicates (sorted by fold size)", fontsize=14)
+    _fig_fb.suptitle(
+        "Fold Class Balance Across Replicates (sorted by fold size)", fontsize=14
+    )
     plt.tight_layout()
 
-    mo.vstack([
-        mo.md("### Fold Size and Class Balance"),
-        mo.as_html(_fig_fb),
-        mo.md("""
+    mo.vstack(
+        [
+            mo.md("### Fold Size and Class Balance"),
+            mo.as_html(_fig_fb),
+            mo.md("""
     Bars show the mean count across 5 replicates, error bars show +/- 1 SD.
     Overlaid points are individual replicate values. Folds are sorted by
     total size (smallest to largest). Variation in bar heights across folds
     reflects the unequal cluster sizes from KMeans.
         """),
-    ])
+        ]
+    )
     return
 
 

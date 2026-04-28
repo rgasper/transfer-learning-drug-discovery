@@ -66,20 +66,21 @@ The two transfer targets test a clear hypothesis:
   other measures passive membrane permeability. Orthogonal mechanisms. We
   expect transfer to be useless or harmful.
 
-### Validating a comparable starting point
+### Validating the starting point
 
-For the transfer comparison to be fair, all architectures must learn
-the RLM source task comparably. If one architecture learns RLM better
-than another, downstream differences could reflect a head start rather
-than a transfer mechanism advantage. We evaluated all three base
-architectures on RLM using the same 5x5 CV protocol:
+For the transfer comparison to be interpretable, we need to understand
+how well each architecture learns the RLM source task. We evaluated all
+three base architectures on RLM using the same 5x5 CV protocol:
 
 ![RLM base model comparison](docs/figures/rlm-base-comparison.png)
 
-All architectures achieve statistically indistinguishable performance
-on RLM (Tukey HSD, FWER = 0.05), confirming that any differences after
-transfer to HLM or PAMPA are attributable to how each architecture
-handles the transfer, not to a stronger source-task model.
+XGBoost on Morgan fingerprints underperforms both D-MPNN architectures
+on RLM (Tukey HSD, FWER = 0.05) and shows substantially higher variance
+across folds. Chemprop and CheMeleon are statistically indistinguishable
+from each other and produce tighter, more stable estimates. Keep this
+asymmetry in mind for the transfer results that follow -- the XGBoost
+source model is the weakest of the three, which constrains how we
+interpret both its successes and its failures after transfer.
 
 ---
 
@@ -111,7 +112,7 @@ the source dataset.
 | Model | AUC-PR (mean +/- std) | Best group | Delta from scratch |
 |---|---|---|---|
 | XGBoost scratch | 0.739 +/- 0.048 | | -- |
-| XGBoost RLM-transfer | 0.789 +/- 0.049 | | +0.049 |
+| XGBoost RLM-transfer | 0.789 +/- 0.049 | * | +0.049 |
 | Chemprop scratch | 0.793 +/- 0.037 | | -- |
 | CheMeleon single-finetune | 0.790 +/- 0.044 | | -- |
 | CheMeleon double-finetune | 0.806 +/- 0.032 | * | +0.016 |
@@ -125,7 +126,12 @@ HSD, FWER = 0.05).
 Transfer helps *every* architecture: +0.049 for XGBoost, +0.038 for
 Chemprop, +0.016 for CheMeleon (single -> double finetune). The benefit
 is large enough to reach statistical significance for the Chemprop pair
-(p = 0.022, Tukey HSD on AUC-PR).
+(p = 0.022, Tukey HSD on AUC-PR). The XGBoost improvement is
+particularly notable given that XGBoost learned the RLM source task
+significantly worse than the D-MPNN architectures (see [Validating the
+starting point](#validating-the-starting-point)) -- even a weaker source
+model transfers useful knowledge when the source and target share
+underlying biochemistry.
 
 ### What the models learn: shared structural rules
 
@@ -192,7 +198,7 @@ versa). The structural features that predict one property are largely
 orthogonal to those that predict the other.
 
 RLM and PAMPA share 99.5% of molecules (same compound library), making
-this a clean test: any benefit from transfer must come from
+this a strong test: any benefit from transfer must come from
 representation learning, not exposure to new chemical matter. And any
 harm must come from *wrong* learned associations being inherited.
 
@@ -224,7 +230,13 @@ HSD, FWER = 0.05).
 The PAMPA random baseline is 0.855 (positive class prevalence). XGBoost
 RLM-transfer (0.853) performs *at or below* the random baseline --
 catastrophic negative transfer. Every other model, including XGBoost
-scratch, is in the statistically indistinguishable top group.
+scratch, is in the statistically indistinguishable top group. This
+failure cannot be explained by the XGBoost source model being
+anomalously strong -- recall from [Validating the starting
+point](#validating-the-starting-point) that XGBoost learned RLM
+*significantly worse* than the D-MPNN architectures. A weaker source
+model still poisons the downstream task, because the problem is
+structural: inherited decision trees cannot be unlearned.
 
 The transfer effect by architecture tells the story:
 
@@ -459,7 +471,17 @@ leaderboard:
    irrelevant, representation-level transfer does not poison the model.
    You pay no penalty for trying.
 
-2. **Scaling behavior.** These are small datasets (900-2,500 compounds).
+2. **Stability across data splits.** The [RLM base model
+   comparison](#validating-the-starting-point) reveals that XGBoost's
+   performance varies substantially more across folds than either D-MPNN
+   architecture. This fold-to-fold instability means XGBoost predictions
+   are more sensitive to which molecules happen to land in training vs.
+   test -- a sign that the fixed fingerprint representation captures less
+   generalizable structure than the learned representations. In a
+   production setting where you retrain on updated compound libraries,
+   this translates to less predictable model behavior over time.
+
+3. **Scaling behavior.** These are small datasets (900-2,500 compounds).
    The advantage of learned representations over fixed fingerprints tends
    to grow with dataset size, as the representation can capture
    increasingly subtle structural patterns that a fixed-radius Morgan
@@ -468,7 +490,7 @@ leaderboard:
    decisively on larger datasets (>10K compounds) and on targets where
    long-range molecular topology matters.
 
-3. **Foundation model potential.** The CheMeleon frozen results
+4. **Foundation model potential.** The CheMeleon frozen results
    demonstrate that a foundation model pre-trained on 1M compounds
    produces representations competitive with task-specific Chemprop
    training -- without any task-specific message-passing gradients. As
@@ -477,7 +499,7 @@ leaderboard:
    current results represent a lower bound on what foundation approaches
    can deliver.
 
-4. **Composability.** The D-MPNN encoder is a modular component that can
+5. **Composability.** The D-MPNN encoder is a modular component that can
    be plugged into multi-task architectures, uncertainty-aware models,
    active learning loops, and generative design pipelines. XGBoost on
    fixed fingerprints is an endpoint: the learned knowledge lives in

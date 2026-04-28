@@ -146,6 +146,7 @@ def _(FIGURES_DIR, all_df, logger, mo, pl, plt, sns):
         "CheMeleon frozen double": "#B39DDB",
     }
 
+    # --- Combined figure (kept for supplementary) ---
     _fig_box, _axes_box = plt.subplots(1, 2, figsize=(20, 7), sharey=False)
     for _i, _target in enumerate(["HLM Stability", "PAMPA pH 7.4"]):
         _subset = all_df.filter(pl.col("target") == _target).to_pandas()
@@ -166,10 +167,38 @@ def _(FIGURES_DIR, all_df, logger, mo, pl, plt, sns):
 
     _fig_box.suptitle("All Models: AUC-PR Distributions (25 folds)", fontsize=14)
     plt.tight_layout()
+    _fig_box.savefig(
+        FIGURES_DIR / "all-models-boxplots.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor="white",
+    )
+    logger.info(f"Saved {FIGURES_DIR / 'all-models-boxplots.png'}")
 
-    _path = FIGURES_DIR / "all-models-boxplots.png"
-    _fig_box.savefig(_path, dpi=150, bbox_inches="tight", facecolor="white")
-    logger.info(f"Saved {_path}")
+    # --- Separate per-endpoint boxplots ---
+    for _target in ["HLM Stability", "PAMPA pH 7.4"]:
+        _slug = "hlm" if "HLM" in _target else "pampa"
+        _fig_single, _ax_single = plt.subplots(figsize=(12, 6))
+        _subset = all_df.filter(pl.col("target") == _target).to_pandas()
+        sns.boxplot(
+            data=_subset,
+            x="model",
+            y="avg_precision",
+            hue="model",
+            ax=_ax_single,
+            order=_model_order,
+            palette=_palette,
+            legend=False,
+        )
+        _ax_single.set_title(f"{_target}: AUC-PR Distributions (25 folds)", fontsize=13)
+        _ax_single.set_xlabel("")
+        _ax_single.set_ylabel("AUC-PR")
+        _ax_single.tick_params(axis="x", rotation=45)
+        _fig_single.tight_layout()
+        _path = FIGURES_DIR / f"boxplots-{_slug}-auc-pr.png"
+        _fig_single.savefig(_path, dpi=150, bbox_inches="tight", facecolor="white")
+        logger.info(f"Saved {_path}")
+        plt.close(_fig_single)
 
     mo.vstack(
         [
