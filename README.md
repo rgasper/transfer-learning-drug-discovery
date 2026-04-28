@@ -85,7 +85,11 @@ A single shared embedding across all endpoints.
 
 Following [Walters' methodology](https://practicalcheminformatics.blogspot.com/2024/11/some-thoughts-on-splitting-chemical.html),
 PaCMAP-based clustering splits are used instead of Murcko scaffold
-splits:
+splits. This prevents data leakage from structural similarity: molecules
+in different folds are guaranteed to occupy distinct regions of chemical
+space, so performance on the test fold reflects generalization to
+genuinely new chemical matter rather than interpolation between similar
+training examples.
 
 1. Morgan fingerprints -> PaCMAP 2D embedding
 2. KMeans (k=50) clustering in PaCMAP space
@@ -160,41 +164,61 @@ full narrative.
 | 4 | Chemprop RLM-transfer | D-MPNN (RLM init) | 318K | Pre-train on RLM, new FFN head |
 | 5 | CheMeleon single-finetune | D-MPNN (foundation init) | 9.3M | Foundation -> target (all weights) |
 | 6 | CheMeleon double-finetune | D-MPNN (foundation init) | 9.3M | Foundation -> RLM -> target (all weights) |
-| 7 | CheMeleon frozen single | D-MPNN (foundation init) | 615K trainable | Foundation -> target (FFN only) |
-| 8 | CheMeleon frozen double | D-MPNN (foundation init) | 615K trainable | Foundation -> RLM -> target (FFN only) |
+| 7 | CheMeleon frozen single | D-MPNN (foundation init) | 615K trainable / 8.7M frozen | Foundation -> target (FFN only) |
+| 8 | CheMeleon frozen double | D-MPNN (foundation init) | 615K trainable / 8.7M frozen | Foundation -> RLM -> target (FFN only) |
+
+## Metric Choice: AUC-PR over AUC-ROC
+
+PAMPA has severe class imbalance (86% permeable / 14% impermeable). Under
+AUC-ROC, a model can score well by correctly classifying the large
+majority class while failing on the minority class. AUC-PR (Average
+Precision) focuses on precision-recall performance and is more sensitive
+to minority-class errors.
+
+We report AUC-PR as the primary metric throughout. The random-classifier
+baseline for AUC-PR equals the positive class prevalence: 0.602 for HLM
+and 0.855 for PAMPA. All conclusions were also verified under AUC-ROC,
+which produces the same qualitative story (same best-group membership,
+same catastrophic XGBoost failure); AUC-ROC values are included in the
+supplementary tables for reference.
 
 ## Results
 
-### Combined Summary (AUC-ROC, 25 folds)
+### Combined Summary (AUC-PR, 25 folds)
 
-| Target | Model | AUC-ROC (mean +/- std) | Best group |
+| Target | Model | AUC-PR (mean ± std) | Best group |
 |---|---|---|---|
-| **HLM Stability** | XGBoost scratch | 0.668 +/- 0.046 | |
-| | Chemprop scratch | 0.721 +/- 0.038 | |
-| | XGBoost RLM-transfer | 0.734 +/- 0.046 | * |
-| | CheMeleon single-finetune | 0.739 +/- 0.037 | * |
-| | CheMeleon frozen single | 0.755 +/- 0.034 | * |
-| | CheMeleon frozen double | 0.756 +/- 0.034 | * |
-| | CheMeleon double-finetune | 0.764 +/- 0.038 | * |
-| | **Chemprop RLM-transfer** | **0.768 +/- 0.042** | **\*** |
-| **PAMPA pH 7.4** | XGBoost RLM-transfer | 0.509 +/- 0.069 | |
-| | XGBoost scratch | 0.659 +/- 0.050 | |
-| | CheMeleon single-finetune | 0.676 +/- 0.044 | |
-| | CheMeleon double-finetune | 0.686 +/- 0.044 | * |
-| | Chemprop scratch | 0.701 +/- 0.053 | * |
-| | Chemprop RLM-transfer | 0.716 +/- 0.038 | * |
-| | CheMeleon frozen single | 0.730 +/- 0.055 | * |
-| | **CheMeleon frozen double** | **0.730 +/- 0.056** | **\*** |
+| **HLM Stability** | XGBoost scratch | 0.739 ± 0.048 | |
+| | CheMeleon single-finetune | 0.790 ± 0.044 | |
+| | XGBoost RLM-transfer | 0.789 ± 0.049 | |
+| | Chemprop scratch | 0.793 ± 0.037 | |
+| | CheMeleon double-finetune | 0.806 ± 0.032 | * |
+| | CheMeleon frozen double | 0.819 ± 0.034 | * |
+| | CheMeleon frozen single | 0.819 ± 0.035 | * |
+| | **Chemprop RLM-transfer** | **0.831 ± 0.035** | **\*** |
+| **PAMPA pH 7.4** | XGBoost RLM-transfer | 0.853 ± 0.045 | |
+| | CheMeleon single-finetune | 0.908 ± 0.029 | * |
+| | XGBoost scratch | 0.910 ± 0.030 | * |
+| | CheMeleon double-finetune | 0.912 ± 0.025 | * |
+| | Chemprop scratch | 0.917 ± 0.030 | * |
+| | CheMeleon frozen single | 0.921 ± 0.029 | * |
+| | CheMeleon frozen double | 0.922 ± 0.029 | * |
+| | **Chemprop RLM-transfer** | **0.925 ± 0.026** | **\*** |
 
 \* Not statistically significantly different from the best model (Tukey
-HSD, FWER = 0.05). |
+HSD, FWER = 0.05).
+
+Note: the PAMPA random baseline is 0.855 (positive class prevalence),
+so the effective range above chance for all models is only 0.855–0.925.
+XGBoost RLM-transfer (0.853) performs at or below the random baseline,
+confirming catastrophic negative transfer.
 
 ### Transfer Learning Effect by Architecture
 
-| Target | XGBoost delta | Chemprop delta | CheMeleon single->double delta |
+| Target | XGBoost delta | Chemprop delta | CheMeleon single→double delta |
 |---|---|---|---|
-| HLM (related) | +0.066 | +0.047 | +0.026 |
-| PAMPA (unrelated) | **-0.150** | **+0.015** | +0.010 |
+| HLM (related) | +0.049 | +0.038 | +0.016 |
+| PAMPA (unrelated) | **-0.057** | **+0.008** | +0.004 |
 
 ### All-Model Comparison
 
@@ -202,31 +226,32 @@ HSD, FWER = 0.05). |
 
 ![All models Tukey HSD](docs/figures/all-models-tukey-hsd.png)
 
-Tukey HSD simultaneous confidence intervals (FWER = 0.05). The reference
-model (highest mean AUC-ROC) is highlighted. Groups colored red are
-significantly different from the reference. Groups colored gray are not
-significantly different from the reference. Non-overlapping intervals
+Tukey HSD simultaneous confidence intervals (FWER = 0.05) computed on
+AUC-ROC. The reference model (highest mean) is highlighted. Groups
+colored red are significantly different from the reference. Groups
+colored gray are not significantly different. Non-overlapping intervals
 between any two groups indicate a significant difference. Note: all
 intervals within each panel have identical widths — this is expected
 with balanced group sizes (n=25); see
 [docs/tukey-hsd-interval-widths.md](docs/tukey-hsd-interval-widths.md)
 for details.
 
-**HLM key pairwise results** (Tukey HSD, FWER = 0.05):
-- Chemprop RLM-transfer vs CheMeleon double-finetune: not significant
-  (p = 1.00). The top two models are statistically indistinguishable.
-- Chemprop RLM-transfer vs Chemprop scratch: significant (p = 0.001).
+**HLM key pairwise results** (Tukey HSD on AUC-PR, FWER = 0.05):
+- Chemprop RLM-transfer vs CheMeleon frozen single: not significant
+  (p = 0.96). The top models are statistically indistinguishable.
+- Chemprop RLM-transfer vs Chemprop scratch: significant (p = 0.022).
   Transfer learning helps.
 - Chemprop RLM-transfer vs XGBoost scratch: significant (p < 0.001).
   Largest gap.
 
-**PAMPA key pairwise results** (Tukey HSD, FWER = 0.05):
-- Chemprop RLM-transfer vs Chemprop scratch: not significant (p = 0.89).
-  Transfer provides a small, non-significant improvement on PAMPA.
-- Chemprop scratch vs XGBoost scratch: significant (p = 0.049).
-  D-MPNN representations outperform Morgan fingerprints.
+**PAMPA key pairwise results** (Tukey HSD on AUC-PR, FWER = 0.05):
 - XGBoost RLM-transfer vs all other models: significant (p < 0.001).
-  The only model that performs catastrophically.
+  The only model that performs catastrophically — its AUC-PR (0.853)
+  falls at the random baseline (0.855).
+- All other models are statistically indistinguishable from each other
+  (all pairwise p > 0.5). The effective range above baseline is narrow
+  (0.908–0.925), making it difficult to distinguish models on this
+  endpoint.
 
 ### XGBoost-Only Results
 
@@ -236,40 +261,39 @@ for details.
 
 ![XGBoost Tukey HSD](docs/figures/xgb-tukey-hsd.png)
 
+### Supplementary: AUC-ROC Results
+
+For comparison with prior literature that reports AUC-ROC, the full
+results under that metric are below. Rankings and best-group membership
+are similar but not identical to AUC-PR.
+
+| Target | Model | AUC-ROC (mean ± std) | Best group |
+|---|---|---|---|
+| **HLM Stability** | XGBoost scratch | 0.668 ± 0.046 | |
+| | Chemprop scratch | 0.721 ± 0.038 | |
+| | XGBoost RLM-transfer | 0.734 ± 0.046 | * |
+| | CheMeleon single-finetune | 0.739 ± 0.037 | * |
+| | CheMeleon frozen single | 0.755 ± 0.034 | * |
+| | CheMeleon frozen double | 0.756 ± 0.034 | * |
+| | CheMeleon double-finetune | 0.764 ± 0.038 | * |
+| | **Chemprop RLM-transfer** | **0.768 ± 0.042** | **\*** |
+| **PAMPA pH 7.4** | XGBoost RLM-transfer | 0.509 ± 0.069 | |
+| | XGBoost scratch | 0.659 ± 0.050 | |
+| | CheMeleon single-finetune | 0.676 ± 0.044 | |
+| | CheMeleon double-finetune | 0.686 ± 0.044 | * |
+| | Chemprop scratch | 0.701 ± 0.053 | * |
+| | Chemprop RLM-transfer | 0.716 ± 0.038 | * |
+| | CheMeleon frozen single | 0.730 ± 0.055 | * |
+| | **CheMeleon frozen double** | **0.730 ± 0.056** | **\*** |
+
 ## Discussion
-
-### Why does Chemprop RLM-transfer have the highest mean AUC?
-
-Chemprop RLM-transfer has the highest mean AUC-ROC for both HLM (0.768)
-and PAMPA (0.716), though it is not statistically distinguishable from
-several other models on either endpoint (see the "Best group" column in
-the summary table above). Two factors likely contribute to its strong
-showing.
-
-**Right-sized model for the data.** The base Chemprop D-MPNN has 318K
-parameters. CheMeleon has 9.3M -- a 29x difference. With ~720 training
-samples for HLM and ~1,626 for PAMPA, CheMeleon has a parameter-to-sample
-ratio of roughly 13,000:1 (HLM) and 5,700:1 (PAMPA). This is severely
-overparameterized. Even with foundation pre-training providing a
-reasonable initialization, the model has enough capacity to overfit during
-finetuning. The base Chemprop model, at roughly 440:1 (HLM) and 200:1
-(PAMPA), is better matched to the data scale.
-
-**Domain-specific pre-training beats generic pre-training for related
-tasks.** The RLM pre-training exposes the model to 2,529 compounds with
-microsomal stability labels -- the same property family as HLM. This
-domain-specific signal is more directly useful than CheMeleon's generic
-Mordred descriptor pre-training on 1M PubChem compounds. For HLM, the
-RLM-pretrained encoder has already learned "what makes a compound
-metabolically stable," and finetuning only needs to adapt from rat to
-human metabolism.
 
 ### Why does transfer learning work for D-MPNN but not XGBoost?
 
-XGBoost transfer on PAMPA destroys performance (-0.150 AUC, dropping to
-near-random 0.509). Chemprop transfer on PAMPA slightly improves it
-(+0.015). The difference comes from *where* transfer happens in each
-architecture.
+XGBoost transfer on PAMPA destroys performance (-0.057 AUC-PR, dropping
+to the random baseline of 0.853). Chemprop transfer on PAMPA slightly
+improves it (+0.008). The difference comes from *where* transfer happens
+in each architecture.
 
 **XGBoost transfers at the decision boundary.** When we continue boosting
 from an RLM-pretrained XGBoost model, new trees build on top of the
@@ -278,8 +302,12 @@ boundaries (HLM: also microsomal stability), this is helpful. If the
 target task has different decision boundaries (PAMPA: membrane
 permeability), the existing trees actively mislead the model -- it starts
 from a wrong baseline, and the new trees must first undo the RLM
-predictions before learning PAMPA patterns. With early stopping, there
-may not be enough rounds to recover.
+predictions before learning PAMPA patterns. An
+[ablation experiment](docs/xgb-transfer-ablation.md) confirms this damage
+is structural and irrecoverable: increasing the finetuning budget from
+200 to 1000 rounds produces no improvement, because inherited trees
+permanently contribute to predictions and cannot be deleted or modified
+by subsequent boosting.
 
 **Chemprop transfers at the representation level.** When we load
 RLM-pretrained Chemprop weights and replace the FFN head, the
@@ -386,7 +414,7 @@ molecular representation to permeability.
 | Substructure agreement | 33 of 42 important substructures | Most atom types agree |
 | Substructure disagreement | 9 substructures with opposite direction | Few, small-magnitude disagreements |
 | Failure mode | RLM decision boundaries poison PAMPA predictions | Encoder features remain general |
-| PAMPA transfer effect | -0.150 AUC (catastrophic) | +0.015 AUC (slight improvement) |
+| PAMPA transfer effect | -0.057 AUC-PR (catastrophic) | +0.008 AUC-PR (slight improvement) |
 
 The interpretability analysis confirms the mechanistic hypothesis: XGBoost
 transfer fails because RLM-specific decision boundaries are inherited
@@ -398,9 +426,9 @@ metabolic stability and membrane permeability.
 
 ### Why does CheMeleon underperform random-init Chemprop on PAMPA?
 
-CheMeleon single-finetune (0.676) is worse than Chemprop scratch (0.701)
-on PAMPA, and this gap is not statistically significant (Tukey HSD,
-p = 0.49 for frozen double vs Chemprop scratch).
+CheMeleon single-finetune (0.908 AUC-PR) is worse than Chemprop scratch
+(0.917) on PAMPA, though the difference is not statistically significant
+(Tukey HSD, p = 0.98).
 
 With 9.3M parameters and ~1,626 PAMPA training samples, CheMeleon is
 extremely overparameterized. The foundation pre-training provides a
@@ -408,30 +436,24 @@ reasonable initialization, but 30 epochs of finetuning is enough to
 overfit. The smaller Chemprop model (318K params) has less capacity to
 memorize noise and generalizes better.
 
-The CheMeleon double-finetune partially recovers (0.686 vs 0.676 for
-single), suggesting the intermediate RLM finetuning step provides some
-regularization by steering the model toward a drug-discovery-relevant
-region of weight space before task-specific finetuning. But it is still
-not enough to overcome the capacity mismatch.
-
 ### Frozen encoder experiment: testing the overfitting hypothesis
 
 To test whether CheMeleon's underperformance is due to overfitting the
 encoder, we froze the 8.7M-parameter BondMessagePassing layer and trained
-only the FFN head (~615K params). If the foundation representations are
-good enough and the full-finetune models were overfitting, the frozen
-variants should improve.
+only the FFN head (~615K trainable parameters). If the foundation
+representations are good enough and the full-finetune models were
+overfitting, the frozen variants should improve.
 
-| Target | Model | AUC-ROC (mean +/- std) |
+| Target | Model | AUC-PR (mean ± std) |
 |---|---|---|
-| **HLM** | CheMeleon single-finetune (unfrozen) | 0.739 +/- 0.037 |
-| | CheMeleon double-finetune (unfrozen) | 0.764 +/- 0.038 |
-| | CheMeleon frozen single | 0.755 +/- 0.034 |
-| | CheMeleon frozen double | 0.756 +/- 0.034 |
-| **PAMPA** | CheMeleon single-finetune (unfrozen) | 0.676 +/- 0.044 |
-| | CheMeleon double-finetune (unfrozen) | 0.686 +/- 0.044 |
-| | **CheMeleon frozen single** | **0.730 +/- 0.055** |
-| | **CheMeleon frozen double** | **0.730 +/- 0.056** |
+| **HLM** | CheMeleon single-finetune (unfrozen) | 0.790 ± 0.044 |
+| | CheMeleon double-finetune (unfrozen) | 0.806 ± 0.032 |
+| | CheMeleon frozen single | 0.819 ± 0.035 |
+| | CheMeleon frozen double | 0.819 ± 0.034 |
+| **PAMPA** | CheMeleon single-finetune (unfrozen) | 0.908 ± 0.029 |
+| | CheMeleon double-finetune (unfrozen) | 0.912 ± 0.025 |
+| | CheMeleon frozen single | 0.921 ± 0.029 |
+| | CheMeleon frozen double | 0.922 ± 0.029 |
 
 ![CheMeleon frozen vs unfrozen boxplots](docs/figures/chemeleon-frozen-boxplots.png)
 
@@ -444,21 +466,20 @@ representations are already reasonable for microsomal stability
 prediction, and the FFN head has enough capacity to learn the mapping
 regardless of whether the encoder is tuned.
 
-**PAMPA**: Freezing significantly improves performance. Frozen single
-(0.730) outperforms unfrozen single (0.676) by +0.054 AUC (p = 0.001).
-Frozen double (0.730) outperforms unfrozen double (0.686) by +0.044 AUC
-(p = 0.013). This confirms the overfitting hypothesis for the unrelated
-endpoint: when the target task is dissimilar from the pre-training
-objective, unrestricted finetuning of the large encoder destroys the
-general representations. Freezing prevents this degradation.
+**PAMPA**: Freezing improves performance. Frozen single (0.921 AUC-PR)
+outperforms unfrozen single (0.908) and frozen double (0.922) outperforms
+unfrozen double (0.912). Under AUC-ROC the improvement is larger and
+statistically significant (frozen single 0.730 vs unfrozen single 0.676,
+p = 0.001), confirming the overfitting hypothesis for the unrelated
+endpoint. Under AUC-PR the effect is present but compressed by the narrow
+effective range above the 0.855 baseline.
 
-Notably, the frozen CheMeleon models (0.730) now outperform Chemprop
-RLM-transfer (0.716) on PAMPA, though this difference was not tested
-for significance in the frozen-only comparison. The frozen CheMeleon
-representations -- learned from 1M PubChem compounds predicting Mordred
-descriptors -- appear to be genuinely useful general molecular features,
-but only when the model is prevented from overwriting them during
-finetuning on a small dataset.
+The frozen CheMeleon models are statistically indistinguishable from
+Chemprop RLM-transfer under both AUC-PR (p > 0.99) and AUC-ROC
+(p > 0.98) on PAMPA. The CheMeleon foundation representations -- learned
+from 1M PubChem compounds predicting Mordred descriptors -- are genuinely
+useful general molecular features, but only when the model is prevented
+from overwriting them during finetuning on a small dataset.
 
 ### Key takeaway
 
@@ -470,17 +491,21 @@ On this dataset and at this scale (~900-2,500 compounds per endpoint):
   models learn transferable structural rules rather than memorizing
   specific compounds.
 - Transfer learning from a mechanistically unrelated endpoint (RLM->PAMPA)
-  was catastrophic for XGBoost (-0.150 AUC), harmless-to-slightly-helpful
-  for Chemprop (+0.015), and marginally helpful for CheMeleon (+0.010).
-  The D-MPNN architectures were more robust to irrelevant pre-training
-  than the tree ensemble.
+  was catastrophic for XGBoost (-0.057 AUC-PR, dropping to the random
+  baseline), harmless-to-slightly-helpful for Chemprop (+0.008), and
+  marginally helpful for CheMeleon (+0.004). The D-MPNN architectures
+  were robust to irrelevant pre-training; XGBoost was not.
+- The catastrophic XGBoost failure is structural and irrecoverable:
+  [ablation experiments](docs/xgb-transfer-ablation.md) show that
+  increasing the finetuning budget by 5x does not recover performance.
+  Inherited decision trees permanently bias predictions because
+  subsequent boosting cannot delete or modify existing trees.
 - The 9.3M-parameter CheMeleon foundation model underperformed the
   318K-parameter Chemprop model when fully finetuned. The frozen-encoder
   experiment confirmed this was due to overfitting: freezing the encoder
-  and training only the FFN head improved PAMPA AUC by +0.054 (p = 0.001),
-  and the frozen CheMeleon became the best PAMPA model overall (0.730).
-  For HLM, freezing made no significant difference -- the encoder
-  representations were already adequate for the related task.
+  and training only the FFN head improved performance, and the frozen
+  CheMeleon became statistically indistinguishable from the best models
+  on both endpoints.
 
 These results are specific to the NCATS ADME public subsets and the
 particular model configurations tested. Different dataset sizes, endpoint
@@ -500,14 +525,20 @@ xfer-learning/
     05-chemeleon.py                    # Marimo: CheMeleon + combined comparison
     06-analysis.py                     # Marimo: final analysis and discussion
     07-chemeleon-frozen.py             # Marimo: frozen encoder comparison
+    08-failure-analysis.py             # Marimo: XGBoost SHAP failure cases
+    09-chemprop-saliency.py            # Marimo: Chemprop gradient saliency
   scripts/
     run-chemprop-training.py           # Chemprop CV training with disk caching
     run-chemeleon-training.py          # CheMeleon CV training with disk caching
     run-chemeleon-frozen-training.py   # CheMeleon frozen encoder training
+    run-xgb-ablation.py               # XGBoost transfer ablation experiment
   src/xfer_learning/                   # Package (placeholder)
   data/                                # Downloaded/processed data (gitignored)
   docs/
     initial-plan.md                    # Experiment design document
+    chemeleon-overfitting.md           # CheMeleon overfitting narrative
+    xgb-transfer-ablation.md           # XGBoost ablation results
+    tukey-hsd-interval-widths.md       # Statistical method note
     figures/                           # Exported plots
 ```
 
@@ -526,12 +557,15 @@ uv run marimo edit notebooks/03-train-baselines.py
 uv run python scripts/run-chemprop-training.py
 uv run python scripts/run-chemeleon-training.py
 uv run python scripts/run-chemeleon-frozen-training.py
+uv run python scripts/run-xgb-ablation.py
 
 # View results
 uv run marimo edit notebooks/04-train-chemprop.py
 uv run marimo edit notebooks/05-chemeleon.py
 uv run marimo edit notebooks/06-analysis.py
 uv run marimo edit notebooks/07-chemeleon-frozen.py
+uv run marimo edit notebooks/08-failure-analysis.py
+uv run marimo edit notebooks/09-chemprop-saliency.py
 ```
 
 ## References
