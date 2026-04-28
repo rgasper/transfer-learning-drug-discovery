@@ -37,7 +37,8 @@ def _():
     from loguru import logger
     from PIL import Image
     from rdkit import Chem
-    from rdkit.Chem import AllChem, Draw, rdFingerprintGenerator, rdMolDraw2D
+    from rdkit.Chem import AllChem, Draw, rdFingerprintGenerator
+    from rdkit.Chem.Draw import rdMolDraw2D
     from sklearn.metrics import roc_auc_score
 
     from chemprop import data as chemprop_data
