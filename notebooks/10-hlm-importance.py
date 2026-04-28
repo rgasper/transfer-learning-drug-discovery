@@ -49,10 +49,8 @@ def _():
     FIGURES_DIR = Path("docs/figures")
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     return (
-        AllChem,
         Chem,
         DATA_DIR,
-        Draw,
         FIGURES_DIR,
         Image,
         chemprop_data,
@@ -154,7 +152,6 @@ def _(hlm_X, hlm_folds, hlm_labels, logger, roc_auc_score, shap, xgb):
 @app.cell
 def _(
     Chem,
-    defaultdict,
     hlm_smiles,
     logger,
     np,
@@ -417,7 +414,6 @@ def _(
 
 @app.cell
 def _(
-    Chem,
     FIGURES_DIR,
     Image,
     chemprop_atom_means,
