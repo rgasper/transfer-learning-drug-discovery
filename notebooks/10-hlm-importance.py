@@ -565,15 +565,15 @@ def _(
             mo.md("## Combined HLM Feature Importance"),
             mo.as_html(_fig),
             mo.md(f"""
-    **Left (XGBoost):** Top 15 Morgan fingerprint bits ranked by mean |SHAP|
+    **Left (XGBoost):** Top 6 Morgan fingerprint bits ranked by mean |SHAP|
     on HLM test molecules. Each fragment image shows the Morgan radius-3
     neighborhood that activates that bit, drawn from the test molecule where
     that bit had the highest SHAP contribution (i.e., the molecule where the
     bit mattered most). Blue = pushes toward "stable"; red = "unstable."
 
-    **Right (Chemprop):** Top 15 atom types ranked by mean normalized
-    gradient saliency (|dPred/dAtomFeatures|) across 100 sampled HLM test
-    molecules. Each fragment shows the 2-bond neighborhood around the
+    **Right (Chemprop):** Top 6 atom types ranked by mean normalized
+    gradient saliency (|dPred/dAtomFeatures|) across all HLM test
+    molecules. Each fragment shows the 1-bond neighborhood around the
     highest-saliency instance of that atom type (center atom highlighted in
     blue). Error bars = SEM.
 
