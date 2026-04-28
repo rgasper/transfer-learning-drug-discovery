@@ -88,9 +88,7 @@ def _(chemeleon_compare_df, mo, pl):
 
 @app.cell
 def _(chemeleon_compare_df, mo, pairwise_tukeyhsd, pl, plt):
-    from pathlib import Path
-
-    FIGURES_DIR = Path("docs/figures")
+    _FIGURES_DIR = __import__("pathlib").Path("docs/figures")
 
     _fig_tukey, _axes_tukey = plt.subplots(1, 2, figsize=(16, 7))
 
@@ -117,7 +115,7 @@ def _(chemeleon_compare_df, mo, pairwise_tukeyhsd, pl, plt):
     )
     plt.tight_layout()
     _fig_tukey.savefig(
-        FIGURES_DIR / "chemeleon-frozen-tukey-hsd.png",
+        _FIGURES_DIR / "chemeleon-frozen-tukey-hsd.png",
         dpi=150,
         bbox_inches="tight",
         facecolor="white",
@@ -134,9 +132,7 @@ def _(chemeleon_compare_df, mo, pairwise_tukeyhsd, pl, plt):
 
 @app.cell
 def _(chemeleon_compare_df, mo, pl, plt, sns):
-    from pathlib import Path
-
-    FIGURES_DIR = Path("docs/figures")
+    _FIGURES_DIR = __import__("pathlib").Path("docs/figures")
 
     _model_order = [
         "CheMeleon single-finetune",
@@ -174,7 +170,7 @@ def _(chemeleon_compare_df, mo, pl, plt, sns):
     )
     plt.tight_layout()
     _fig_box.savefig(
-        FIGURES_DIR / "chemeleon-frozen-boxplots.png",
+        _FIGURES_DIR / "chemeleon-frozen-boxplots.png",
         dpi=150,
         bbox_inches="tight",
         facecolor="white",
@@ -213,7 +209,7 @@ def _(chemeleon_compare_df, mo, pl, stats):
                     (pl.col("target") == _target) & (pl.col("model") == _unfrozen_name)
                 )
                 .sort("replicate", "fold")
-                .get_column("auc_roc")
+                .get_column("avg_precision")
                 .to_numpy()
             )
             _frozen_vals = (
@@ -221,7 +217,7 @@ def _(chemeleon_compare_df, mo, pl, stats):
                     (pl.col("target") == _target) & (pl.col("model") == _frozen_name)
                 )
                 .sort("replicate", "fold")
-                .get_column("auc_roc")
+                .get_column("avg_precision")
                 .to_numpy()
             )
             _diff = _frozen_vals - _unfrozen_vals

@@ -337,10 +337,9 @@ def _(mo, pl, results_df):
 def _(mo, pl, results_df):
     import matplotlib.pyplot as plt
     import seaborn as sns
-    from pathlib import Path
 
-    FIGURES_DIR = Path("docs/figures")
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    _FIGURES_DIR = __import__("pathlib").Path("docs/figures")
+    _FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
     # Boxplots of AUC-PR by model and target
     _fig_box, _axes_box = plt.subplots(1, 2, figsize=(14, 5), sharey=False)
@@ -362,7 +361,7 @@ def _(mo, pl, results_df):
     _fig_box.suptitle("XGBoost: From Scratch vs RLM Transfer (25 folds)", fontsize=14)
     plt.tight_layout()
     _fig_box.savefig(
-        FIGURES_DIR / "xgb-boxplots.png",
+        _FIGURES_DIR / "xgb-boxplots.png",
         dpi=150,
         bbox_inches="tight",
         facecolor="white",
@@ -452,10 +451,8 @@ def _(mo, np, pl, plt, results_df):
     )
     plt.tight_layout()
 
-    from pathlib import Path
-
     _fig_paired.savefig(
-        Path("docs/figures") / "xgb-paired-comparison.png",
+        __import__("pathlib").Path("docs/figures") / "xgb-paired-comparison.png",
         dpi=150,
         bbox_inches="tight",
         facecolor="white",
@@ -478,10 +475,9 @@ def _(mo, np, pl, plt, results_df):
 
 @app.cell(hide_code=True)
 def _(mo, pl, plt, results_df):
-    from pathlib import Path
     from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
-    FIGURES_DIR = Path("docs/figures")
+    _FIGURES_DIR = __import__("pathlib").Path("docs/figures")
 
     _fig_tukey, _axes_tukey = plt.subplots(1, 2, figsize=(14, 5))
 
@@ -498,7 +494,7 @@ def _(mo, pl, plt, results_df):
     _fig_tukey.suptitle("Tukey HSD Simultaneous Confidence Intervals", fontsize=14)
     plt.tight_layout()
     _fig_tukey.savefig(
-        FIGURES_DIR / "xgb-tukey-hsd.png",
+        _FIGURES_DIR / "xgb-tukey-hsd.png",
         dpi=150,
         bbox_inches="tight",
         facecolor="white",
