@@ -329,6 +329,60 @@ agreed ones, which explains why the transfer model's AUC drops but
 doesn't fully collapse to random: the wrong signals are present but
 not dominant enough to override all correct predictions.
 
+### Chemprop gradient saliency: how the D-MPNN handles the same problem
+
+To compare, we performed the same agree/disagree analysis on Chemprop
+using per-atom gradient saliency (`|dPred/dAtomFeatures|`). Instead of
+fingerprint bits, we aggregate saliency by atom type (element +
+aromaticity + degree) across 100 sampled PAMPA test molecules for both
+the scratch and RLM-transfer models.
+
+**The D-MPNN shows far fewer disagreements.** Where XGBoost had 9
+substructural environments with opposite SHAP directions, Chemprop's
+atom-type saliency shows smaller and fewer disagreements between scratch
+and transfer. This is consistent with the architecture difference:
+Chemprop's transfer replaces the FFN head entirely, so the encoder's
+attention pattern is less directly distorted by the old task.
+
+The per-molecule saliency difference maps (transfer minus scratch,
+red/green diverging gradient) confirm this: for the same failure
+molecules where XGBoost transfer was catastrophically wrong, Chemprop
+transfer shows only modest shifts in atom-level attention, and both
+Chemprop models correctly predict the molecules as permeable.
+
+**XGBoost failure molecule #1** (true: permeable):
+- XGBoost scratch: P(active) = 0.918 (correct)
+- XGBoost RLM-transfer: P(active) = 0.248 (catastrophically wrong)
+- Chemprop scratch: correctly predicts permeable
+- Chemprop RLM-transfer: also correctly predicts permeable
+
+The XGBoost transfer model's SHAP analysis shows it relied on
+RLM-inherited fingerprint bits that pushed toward "inactive" --
+substructures that are metabolically stable (good for RLM) but the
+model incorrectly associates with impermeability. The Chemprop model,
+having re-initialized its FFN head, is not constrained by this inherited
+bias and learns the correct mapping from its (RLM-pretrained but general)
+molecular representation to permeability.
+
+### Comparison across architectures
+
+| Aspect | XGBoost | Chemprop |
+|---|---|---|
+| Transfer mechanism | Continue boosting (shared trees) | New FFN head (shared encoder) |
+| Attribution method | SHAP (per-fingerprint-bit) | Gradient saliency (per-atom) |
+| Substructure agreement | 33 of 42 important substructures | Most atom types agree |
+| Substructure disagreement | 9 substructures with opposite direction | Few, small-magnitude disagreements |
+| Failure mode | RLM decision boundaries poison PAMPA predictions | Encoder features remain general |
+| PAMPA transfer effect | -0.150 AUC (catastrophic) | +0.015 AUC (slight improvement) |
+
+The interpretability analysis confirms the mechanistic hypothesis: XGBoost
+transfer fails because RLM-specific decision boundaries are inherited
+wholesale and cannot be overridden during continued boosting on a small
+dataset. Chemprop transfer succeeds because only the general molecular
+representation is inherited -- the task-specific decision layer is learned
+fresh, insulating the model from conflicting associations between
+metabolic stability and membrane permeability.
+
 ### Why does CheMeleon underperform random-init Chemprop on PAMPA?
 
 CheMeleon single-finetune (0.676) is worse than Chemprop scratch (0.701)
