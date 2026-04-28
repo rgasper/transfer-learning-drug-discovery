@@ -140,11 +140,17 @@ estimates for statistical testing.
 
 ## Models
 
-TODO high level restructure. separate out the initial overfit models as a side project in a separate file. mention in here that we initially overfit chemeleon and acheived counterintuitive worse results.
-
-Six model variants organized along two axes: architecture (XGBoost vs
+Eight model variants organized along two axes: architecture (XGBoost vs
 Chemprop vs CheMeleon) and transfer strategy (scratch vs domain-specific
 vs foundation).
+
+**Note:** Our initial experiments used only the first six models (rows
+1--6 below), with CheMeleon fully finetuned. The foundation model
+produced counterintuitively *worse* results than the much smaller
+Chemprop, which led us to hypothesize overfitting and add the
+frozen-encoder variants (rows 7--8). See
+[docs/chemeleon-overfitting.md](docs/chemeleon-overfitting.md) for the
+full narrative.
 
 | # | Model | Architecture | Params | Transfer Strategy |
 |---|---|---|---|---|
@@ -159,28 +165,29 @@ vs foundation).
 
 ## Results
 
-TODO in combined summary table here, add column marking models which are statistically indistinguishable from best
-
 ### Combined Summary (AUC-ROC, 25 folds)
 
-| Target | Model | AUC-ROC (mean +/- std) |
-|---|---|---|
-| **HLM Stability** | XGBoost scratch | 0.668 +/- 0.046 |
-| | XGBoost RLM-transfer | 0.734 +/- 0.046 |
-| | Chemprop scratch | 0.721 +/- 0.038 |
-| | CheMeleon single-finetune | 0.739 +/- 0.037 |
-| | CheMeleon frozen single | 0.755 +/- 0.034 |
-| | CheMeleon frozen double | 0.756 +/- 0.034 |
-| | CheMeleon double-finetune | 0.764 +/- 0.038 |
-| | **Chemprop RLM-transfer** | **0.768 +/- 0.042** |
-| **PAMPA pH 7.4** | XGBoost RLM-transfer | 0.509 +/- 0.069 |
-| | XGBoost scratch | 0.659 +/- 0.050 |
-| | CheMeleon single-finetune | 0.676 +/- 0.044 |
-| | CheMeleon double-finetune | 0.686 +/- 0.044 |
-| | Chemprop scratch | 0.701 +/- 0.053 |
-| | Chemprop RLM-transfer | 0.716 +/- 0.038 |
-| | CheMeleon frozen single | 0.730 +/- 0.055 |
-| | **CheMeleon frozen double** | **0.730 +/- 0.056** |
+| Target | Model | AUC-ROC (mean +/- std) | Best group |
+|---|---|---|---|
+| **HLM Stability** | XGBoost scratch | 0.668 +/- 0.046 | |
+| | Chemprop scratch | 0.721 +/- 0.038 | |
+| | XGBoost RLM-transfer | 0.734 +/- 0.046 | * |
+| | CheMeleon single-finetune | 0.739 +/- 0.037 | * |
+| | CheMeleon frozen single | 0.755 +/- 0.034 | * |
+| | CheMeleon frozen double | 0.756 +/- 0.034 | * |
+| | CheMeleon double-finetune | 0.764 +/- 0.038 | * |
+| | **Chemprop RLM-transfer** | **0.768 +/- 0.042** | **\*** |
+| **PAMPA pH 7.4** | XGBoost RLM-transfer | 0.509 +/- 0.069 | |
+| | XGBoost scratch | 0.659 +/- 0.050 | |
+| | CheMeleon single-finetune | 0.676 +/- 0.044 | |
+| | CheMeleon double-finetune | 0.686 +/- 0.044 | * |
+| | Chemprop scratch | 0.701 +/- 0.053 | * |
+| | Chemprop RLM-transfer | 0.716 +/- 0.038 | * |
+| | CheMeleon frozen single | 0.730 +/- 0.055 | * |
+| | **CheMeleon frozen double** | **0.730 +/- 0.056** | **\*** |
+
+\* Not statistically significantly different from the best model (Tukey
+HSD, FWER = 0.05). |
 
 ### Transfer Learning Effect by Architecture
 
@@ -191,10 +198,6 @@ TODO in combined summary table here, add column marking models which are statist
 
 ### All-Model Comparison
 
-todo remove first auc-roc bar plot there's no purpose to it.
-
-Todo the error on all the models int eh tukey hsd points look identicaly. the first auc-roc plot you can see they're definitely not. is that just cus the visual is hard to differentiate, or is that a real bug?
-
 ![All models boxplots](docs/figures/all-models-boxplots.png)
 
 ![All models Tukey HSD](docs/figures/all-models-tukey-hsd.png)
@@ -203,7 +206,11 @@ Tukey HSD simultaneous confidence intervals (FWER = 0.05). The reference
 model (highest mean AUC-ROC) is highlighted. Groups colored red are
 significantly different from the reference. Groups colored gray are not
 significantly different from the reference. Non-overlapping intervals
-between any two groups indicate a significant difference.
+between any two groups indicate a significant difference. Note: all
+intervals within each panel have identical widths — this is expected
+with balanced group sizes (n=25); see
+[docs/tukey-hsd-interval-widths.md](docs/tukey-hsd-interval-widths.md)
+for details.
 
 **HLM key pairwise results** (Tukey HSD, FWER = 0.05):
 - Chemprop RLM-transfer vs CheMeleon double-finetune: not significant
@@ -231,13 +238,13 @@ between any two groups indicate a significant difference.
 
 ## Discussion
 
-### Why does Chemprop RLM-transfer outperform everything?
+### Why does Chemprop RLM-transfer have the highest mean AUC?
 
-Chemprop RLM-transfer is the best model for both HLM (0.768) and PAMPA
-(0.716), beating the larger CheMeleon foundation model on both endpoints.
-Two factors explain this.
-
-TODO: not accurate, it is not statistically significantly outperforming everything. a set of models are outperforming some specific poorly performing ones.
+Chemprop RLM-transfer has the highest mean AUC-ROC for both HLM (0.768)
+and PAMPA (0.716), though it is not statistically distinguishable from
+several other models on either endpoint (see the "Best group" column in
+the summary table above). Two factors likely contribute to its strong
+showing.
 
 **Right-sized model for the data.** The base Chemprop D-MPNN has 318K
 parameters. CheMeleon has 9.3M -- a 29x difference. With ~720 training
@@ -392,8 +399,8 @@ metabolic stability and membrane permeability.
 ### Why does CheMeleon underperform random-init Chemprop on PAMPA?
 
 CheMeleon single-finetune (0.676) is worse than Chemprop scratch (0.701)
-on PAMPA, and this gap is not statistically significant only because of
-high variance. The most likely explanation is overfitting. TODO remove the "mos tlikely explanation". the difference is not statistically significant as you just said.
+on PAMPA, and this gap is not statistically significant (Tukey HSD,
+p = 0.49 for frozen double vs Chemprop scratch).
 
 With 9.3M parameters and ~1,626 PAMPA training samples, CheMeleon is
 extremely overparameterized. The foundation pre-training provides a
