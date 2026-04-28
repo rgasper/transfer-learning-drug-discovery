@@ -38,10 +38,14 @@ def _(DATA_DIR, logger, pl):
     xgb_df = pl.read_parquet(DATA_DIR / "xgb_results.parquet")
     chemprop_df = pl.read_parquet(DATA_DIR / "chemprop_results.parquet")
     chemeleon_df = pl.read_parquet(DATA_DIR / "chemeleon_results.parquet")
-    all_df = pl.concat([xgb_df, chemprop_df, chemeleon_df])
+    frozen_df = pl.read_parquet(DATA_DIR / "chemeleon_frozen_results.parquet")
+    all_df = pl.concat([xgb_df, chemprop_df, chemeleon_df, frozen_df])
     logger.info(
-        f"Combined: {all_df.height} results ({xgb_df.height} XGB + {chemprop_df.height} Chemprop + {chemeleon_df.height} CheMeleon)"
+        f"Combined: {all_df.height} results "
+        f"({xgb_df.height} XGB + {chemprop_df.height} Chemprop + "
+        f"{chemeleon_df.height} CheMeleon + {frozen_df.height} frozen)"
     )
+
     return (all_df,)
 
 
@@ -98,7 +102,6 @@ def _(all_df, mo, pairwise_tukeyhsd, pl, plt):
     intervals between any two groups indicate no significant difference.
         """),
     ])
-
     return
 
 
@@ -111,6 +114,8 @@ def _(all_df, mo, pl, plt, sns):
         "Chemprop RLM-transfer",
         "CheMeleon single-finetune",
         "CheMeleon double-finetune",
+        "CheMeleon frozen single",
+        "CheMeleon frozen double",
     ]
     _palette = {
         "XGBoost scratch": "#FF5722",
@@ -119,35 +124,30 @@ def _(all_df, mo, pl, plt, sns):
         "Chemprop RLM-transfer": "#03A9F4",
         "CheMeleon single-finetune": "#4CAF50",
         "CheMeleon double-finetune": "#8BC34A",
+        "CheMeleon frozen single": "#7E57C2",
+        "CheMeleon frozen double": "#B39DDB",
     }
 
-    _fig_box, _axes_box = plt.subplots(1, 2, figsize=(18, 6), sharey=True)
+    _fig_box, _axes_box = plt.subplots(1, 2, figsize=(20, 7), sharey=True)
     for _i, _target in enumerate(["HLM Stability", "PAMPA pH 7.4"]):
         _subset = all_df.filter(pl.col("target") == _target).to_pandas()
         sns.boxplot(
-            data=_subset,
-            x="model",
-            y="auc_roc",
-            hue="model",
-            ax=_axes_box[_i],
-            order=_model_order,
-            palette=_palette,
-            legend=False,
+            data=_subset, x="model", y="auc_roc", hue="model",
+            ax=_axes_box[_i], order=_model_order, palette=_palette, legend=False,
         )
-        _axes_box[_i].set_title(_target, fontsize=13)
+        _axes_box[_i].set_title(_target)
         _axes_box[_i].set_xlabel("")
         _axes_box[_i].set_ylabel("AUC-ROC" if _i == 0 else "")
         _axes_box[_i].tick_params(axis="x", rotation=45)
 
-    _fig_box.suptitle("AUC-ROC Distributions (25 folds)", fontsize=14)
+    _fig_box.suptitle("All Models: AUC-ROC Distributions (25 folds)", fontsize=14)
     plt.tight_layout()
 
-    mo.vstack(
-        [
-            mo.md("## AUC-ROC Distributions"),
-            mo.as_html(_fig_box),
-        ]
-    )
+    mo.vstack([
+        mo.md("## AUC-ROC Distributions"),
+        mo.as_html(_fig_box),
+    ])
+
     return
 
 

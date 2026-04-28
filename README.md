@@ -101,8 +101,10 @@ vs foundation).
 | 2 | XGBoost RLM-transfer | Gradient-boosted trees | -- | Continue boosting from RLM model |
 | 3 | Chemprop scratch | D-MPNN (random init) | 318K | None |
 | 4 | Chemprop RLM-transfer | D-MPNN (RLM init) | 318K | Pre-train on RLM, new FFN head |
-| 5 | CheMeleon single-finetune | D-MPNN (foundation init) | 9.3M | Foundation -> target |
-| 6 | CheMeleon double-finetune | D-MPNN (foundation init) | 9.3M | Foundation -> RLM -> target |
+| 5 | CheMeleon single-finetune | D-MPNN (foundation init) | 9.3M | Foundation -> target (all weights) |
+| 6 | CheMeleon double-finetune | D-MPNN (foundation init) | 9.3M | Foundation -> RLM -> target (all weights) |
+| 7 | CheMeleon frozen single | D-MPNN (foundation init) | 615K trainable | Foundation -> target (FFN only) |
+| 8 | CheMeleon frozen double | D-MPNN (foundation init) | 615K trainable | Foundation -> RLM -> target (FFN only) |
 
 ## Results
 
@@ -114,6 +116,8 @@ vs foundation).
 | | XGBoost RLM-transfer | 0.734 +/- 0.046 |
 | | Chemprop scratch | 0.721 +/- 0.038 |
 | | CheMeleon single-finetune | 0.739 +/- 0.037 |
+| | CheMeleon frozen single | 0.755 +/- 0.034 |
+| | CheMeleon frozen double | 0.756 +/- 0.034 |
 | | CheMeleon double-finetune | 0.764 +/- 0.038 |
 | | **Chemprop RLM-transfer** | **0.768 +/- 0.042** |
 | **PAMPA pH 7.4** | XGBoost RLM-transfer | 0.509 +/- 0.069 |
@@ -121,7 +125,9 @@ vs foundation).
 | | CheMeleon single-finetune | 0.676 +/- 0.044 |
 | | CheMeleon double-finetune | 0.686 +/- 0.044 |
 | | Chemprop scratch | 0.701 +/- 0.053 |
-| | **Chemprop RLM-transfer** | **0.716 +/- 0.038** |
+| | Chemprop RLM-transfer | 0.716 +/- 0.038 |
+| | CheMeleon frozen single | 0.730 +/- 0.055 |
+| | **CheMeleon frozen double** | **0.730 +/- 0.056** |
 
 ### Transfer Learning Effect by Architecture
 
