@@ -9,13 +9,12 @@ def _():
     import marimo as mo
 
     mo.md("""
-    # 10 — HLM Feature Importance: XGBoost SHAP + Chemprop Saliency
+    # 12 — PAMPA Feature Importance: XGBoost SHAP + Chemprop Saliency
 
-    Computes feature importance for HLM Stability predictions using both
+    Computes feature importance for PAMPA pH 7.4 predictions using both
     XGBoost (SHAP on Morgan fingerprint bits) and Chemprop (per-atom
-    gradient saliency). Produces a single combined figure showing what
-    structural features both architectures agree drive metabolic stability
-    predictions -- evidence that the models learn shared structural rules.
+    gradient saliency). Produces a combined figure showing what structural
+    features each architecture attends to for membrane permeability.
     """)
     return (mo,)
 
@@ -71,7 +70,7 @@ def _():
 
 @app.cell
 def _(DATA_DIR, logger, np):
-    """Load HLM split data."""
+    """Load PAMPA split data."""
     import json
 
     with open(DATA_DIR / "split_config.json") as _f:
@@ -80,26 +79,26 @@ def _(DATA_DIR, logger, np):
     _fp_data = np.load(DATA_DIR / "morgan_fps_2048_r3.npz", allow_pickle=True)
     global_fps = _fp_data["fp_matrix"]
 
-    _hlm_split = np.load(DATA_DIR / "hlm_splits.npz", allow_pickle=True)
-    hlm_smiles = list(_hlm_split["smiles"])
-    hlm_labels = _hlm_split["labels"]
-    hlm_folds = _hlm_split["folds"]
-    hlm_fp_indices = _hlm_split["fp_indices"]
-    hlm_X = global_fps[hlm_fp_indices]
+    _pampa_split = np.load(DATA_DIR / "pampa_splits.npz", allow_pickle=True)
+    pampa_smiles = list(_pampa_split["smiles"])
+    pampa_labels = _pampa_split["labels"]
+    pampa_folds = _pampa_split["folds"]
+    pampa_fp_indices = _pampa_split["fp_indices"]
+    pampa_X = global_fps[pampa_fp_indices]
 
-    logger.info(f"HLM: {hlm_X.shape[0]} molecules")
-    return hlm_X, hlm_folds, hlm_labels, hlm_smiles
+    logger.info(f"PAMPA: {pampa_X.shape[0]} molecules")
+    return pampa_X, pampa_folds, pampa_labels, pampa_smiles
 
 
 @app.cell
-def _(hlm_X, hlm_folds, hlm_labels, logger, np, roc_auc_score, shap, xgb):
-    """Train XGBoost on HLM (rep 0, fold 0) and compute SHAP values."""
-    _fold_assign = hlm_folds[0]
+def _(logger, np, pampa_X, pampa_folds, pampa_labels, roc_auc_score, shap, xgb):
+    """Train XGBoost on PAMPA (rep 0, fold 0) and compute SHAP values."""
+    _fold_assign = pampa_folds[0]
     xgb_test_mask = _fold_assign == 0
     _train_mask = ~xgb_test_mask
 
-    _dtrain = xgb.DMatrix(hlm_X[_train_mask], label=hlm_labels[_train_mask])
-    _dval = xgb.DMatrix(hlm_X[xgb_test_mask], label=hlm_labels[xgb_test_mask])
+    _dtrain = xgb.DMatrix(pampa_X[_train_mask], label=pampa_labels[_train_mask])
+    _dval = xgb.DMatrix(pampa_X[xgb_test_mask], label=pampa_labels[xgb_test_mask])
 
     xgb_model = xgb.train(
         {
@@ -121,13 +120,12 @@ def _(hlm_X, hlm_folds, hlm_labels, logger, np, roc_auc_score, shap, xgb):
 
     _y_prob = xgb_model.predict(_dval)
     logger.info(
-        f"XGBoost HLM AUC: {roc_auc_score(hlm_labels[xgb_test_mask], _y_prob):.3f}"
+        f"XGBoost PAMPA AUC: {roc_auc_score(pampa_labels[xgb_test_mask], _y_prob):.3f}"
     )
 
     xgb_explainer = shap.TreeExplainer(xgb_model)
-    xgb_shap_values = xgb_explainer.shap_values(hlm_X[xgb_test_mask])
+    xgb_shap_values = xgb_explainer.shap_values(pampa_X[xgb_test_mask])
 
-    # Mean absolute and signed SHAP per bit
     xgb_mean_abs_shap = np.abs(xgb_shap_values).mean(axis=0)
     xgb_mean_signed_shap = xgb_shap_values.mean(axis=0)
     xgb_top_bits = np.argsort(xgb_mean_abs_shap)[-15:][::-1]
@@ -145,18 +143,20 @@ def _(hlm_X, hlm_folds, hlm_labels, logger, np, roc_auc_score, shap, xgb):
 @app.cell
 def _(
     Chem,
-    hlm_smiles,
     logger,
+    np,
+    pampa_smiles,
     rdFingerprintGenerator,
     xgb_shap_values,
     xgb_test_mask,
     xgb_top_bits,
 ):
-    """For each top SHAP bit, find the molecule where it contributes most and store mol+atom info."""
+    """For each top SHAP bit, find the molecule where it contributes most."""
     _gen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
-    _test_smiles = [hlm_smiles[i] for i in range(len(hlm_smiles)) if xgb_test_mask[i]]
+    _test_smiles = [
+        pampa_smiles[i] for i in range(len(pampa_smiles)) if xgb_test_mask[i]
+    ]
 
-    # For each bit: (mol, center_atom_idx, radius) from the highest-|SHAP| molecule
     xgb_bit_to_mol_info = {}
     _bit_best_shap = {}
 
@@ -189,28 +189,30 @@ def _(
     chemprop_data,
     defaultdict,
     featurizers,
-    hlm_folds,
-    hlm_labels,
-    hlm_smiles,
     lightning_pl,
     logger,
     models,
     nn,
     np,
+    pampa_folds,
+    pampa_labels,
+    pampa_smiles,
     roc_auc_score,
     torch,
 ):
-    """Train Chemprop on HLM and compute per-atom saliency with best-instance tracking."""
+    """Train Chemprop on PAMPA and compute per-atom saliency."""
     _featurizer = featurizers.SimpleMoleculeMolGraphFeaturizer()
 
-    _fold_assign = hlm_folds[0]
+    _fold_assign = pampa_folds[0]
     chemprop_test_mask = _fold_assign == 0
     _train_mask = ~chemprop_test_mask
 
-    _train_smi = [hlm_smiles[i] for i in range(len(hlm_smiles)) if _train_mask[i]]
-    _train_y = hlm_labels[_train_mask].reshape(-1, 1).astype(float)
-    _test_smi = [hlm_smiles[i] for i in range(len(hlm_smiles)) if chemprop_test_mask[i]]
-    _test_y = hlm_labels[chemprop_test_mask].reshape(-1, 1).astype(float)
+    _train_smi = [pampa_smiles[i] for i in range(len(pampa_smiles)) if _train_mask[i]]
+    _train_y = pampa_labels[_train_mask].reshape(-1, 1).astype(float)
+    _test_smi = [
+        pampa_smiles[i] for i in range(len(pampa_smiles)) if chemprop_test_mask[i]
+    ]
+    _test_y = pampa_labels[chemprop_test_mask].reshape(-1, 1).astype(float)
 
     _n = len(_train_smi)
     _n_val = max(1, int(_n * 0.1))
@@ -261,12 +263,12 @@ def _(
     _preds = _trainer.predict(_model, _test_loader)
     _y_prob = torch.cat(_preds).cpu().numpy().flatten()
     logger.info(
-        f"Chemprop HLM AUC: {roc_auc_score(hlm_labels[chemprop_test_mask], _y_prob):.3f}"
+        f"Chemprop PAMPA AUC: {roc_auc_score(pampa_labels[chemprop_test_mask], _y_prob):.3f}"
     )
 
-    # Compute atom saliency with best-instance tracking per atom type
+    # Compute atom saliency with best-instance tracking
     chemprop_atom_type_saliency = defaultdict(list)
-    chemprop_atom_type_best = {}  # key -> (mol, atom_idx, norm_saliency)
+    chemprop_atom_type_best = {}
 
     _sample_idx = np.random.default_rng(42).choice(
         len(_test_smi), size=min(100, len(_test_smi)), replace=False
@@ -353,18 +355,10 @@ def _(
     xgb_mean_signed_shap,
     xgb_top_bits,
 ):
-    """Generate the combined HLM feature importance figure.
-
-    Draws substructure neighborhoods directly from parent molecules
-    (no SMILES round-trip) to ensure structural accuracy.
-    """
+    """Generate the combined PAMPA feature importance figure."""
 
     def _draw_neighborhood(mol, center_atom, radius, size=(220, 160)):
-        """Extract and draw only the atom neighborhood (not the full molecule).
-
-        Uses PathToSubmol to extract the substructure, then highlights the
-        center atom. Falls back to drawing just the center atom if extraction
-        fails.
+        """Extract and draw only the atom neighborhood as a submolecule.
 
         Args:
             mol: RDKit Mol object (the full parent molecule).
@@ -376,7 +370,6 @@ def _(
             PIL Image of the extracted fragment, or None on failure.
         """
         if radius == 0:
-            # Just draw the single atom as a SMILES
             _atom = mol.GetAtomWithIdx(center_atom)
             _smi = f"[{_atom.GetSymbol()}]"
             _frag = Chem.MolFromSmiles(_smi)
@@ -393,16 +386,12 @@ def _(
         if not _env:
             return None
 
-        # Extract submolecule preserving atom mapping
         _amap = {}
         _submol = Chem.PathToSubmol(mol, _env, atomMap=_amap)
         if _submol is None or _submol.GetNumAtoms() == 0:
             return None
 
-        # Find which atom in the submol corresponds to center_atom
         _center_in_sub = _amap.get(center_atom, -1)
-
-        # Highlight the center atom
         _highlight_atoms = [_center_in_sub] if _center_in_sub >= 0 else []
         _atom_colors = (
             {_center_in_sub: (0.2, 0.6, 1.0, 1.0)} if _center_in_sub >= 0 else {}
@@ -424,11 +413,10 @@ def _(
     _n_xgb = min(15, len(xgb_top_bits))
     _n_chemprop = min(15, len(chemprop_top_atom_types))
 
-    # --- Build figure: 4 columns ---
     _fig = plt.figure(figsize=(22, 12))
     _gs = _fig.add_gridspec(1, 4, width_ratios=[0.3, 0.7, 0.7, 0.3], wspace=0.05)
 
-    # --- XGBoost substructure images (left of bars) ---
+    # --- XGBoost substructure images ---
     _ax_xgb_img = _fig.add_subplot(_gs[0])
     _ax_xgb_img.set_xlim(0, 1)
     _ax_xgb_img.set_ylim(-0.5, _n_xgb - 0.5)
@@ -471,7 +459,7 @@ def _(
     _ax_xgb.set_yticklabels(_xgb_labels, fontsize=9)
     _ax_xgb.set_xlabel("Mean |SHAP value|", fontsize=11)
     _ax_xgb.set_title(
-        "XGBoost: Top Morgan FP Bits\n(blue = stable, red = unstable)",
+        "XGBoost: Top Morgan FP Bits\n(blue = permeable, red = impermeable)",
         fontsize=12,
         fontweight="bold",
     )
@@ -504,7 +492,7 @@ def _(
     )
     _ax_cp.invert_yaxis()
 
-    # --- Chemprop fragment images (right of bars) ---
+    # --- Chemprop fragment images ---
     _ax_cp_img = _fig.add_subplot(_gs[3])
     _ax_cp_img.set_xlim(0, 1)
     _ax_cp_img.set_ylim(-0.5, _n_chemprop - 0.5)
@@ -515,7 +503,6 @@ def _(
         if _atype in chemprop_atom_type_best:
             _mol, _atom_idx, _sal_val = chemprop_atom_type_best[_atype]
             try:
-                # Draw 2-bond neighborhood centered on the best-saliency atom
                 _img = _draw_neighborhood(_mol, _atom_idx, 2)
                 if _img is not None:
                     _inset = _ax_cp_img.inset_axes(
@@ -528,37 +515,35 @@ def _(
                 pass
 
     _fig.suptitle(
-        "HLM Stability: Feature Importance by Architecture",
+        "PAMPA pH 7.4: Feature Importance by Architecture",
         fontsize=14,
         fontweight="bold",
         y=1.01,
     )
     plt.tight_layout()
 
-    _save_path = FIGURES_DIR / "hlm-feature-importance.png"
+    _save_path = FIGURES_DIR / "pampa-feature-importance.png"
     _fig.savefig(_save_path, dpi=150, bbox_inches="tight", facecolor="white")
     logger.info(f"Saved combined figure to {_save_path}")
 
     mo.vstack(
         [
-            mo.md("## Combined HLM Feature Importance"),
+            mo.md("## Combined PAMPA Feature Importance"),
             mo.as_html(_fig),
             mo.md(f"""
-    **Left (XGBoost):** Top 15 Morgan fingerprint bits ranked by mean |SHAP|
-    on HLM test molecules. Each fragment image shows the Morgan radius-3
-    neighborhood that activates that bit, drawn from the test molecule where
-    that bit had the highest SHAP contribution (i.e., the molecule where the
-    bit mattered most). Blue = pushes toward "stable"; red = "unstable."
+**Left (XGBoost):** Top 15 Morgan fingerprint bits ranked by mean |SHAP|
+on PAMPA test molecules. Each fragment shows the Morgan radius-3
+neighborhood from the test molecule where that bit had the highest SHAP
+contribution. Blue = pushes toward "permeable"; red = "impermeable."
 
-    **Right (Chemprop):** Top 15 atom types ranked by mean normalized
-    gradient saliency (|dPred/dAtomFeatures|) across 100 sampled HLM test
-    molecules. Each fragment shows the 2-bond neighborhood around the
-    highest-saliency instance of that atom type (center atom highlighted in
-    blue). Error bars = SEM.
+**Right (Chemprop):** Top 15 atom types ranked by mean normalized
+gradient saliency across 100 sampled PAMPA test molecules. Each fragment
+shows the 2-bond neighborhood around the highest-saliency instance of
+that atom type (center atom highlighted in blue). Error bars = SEM.
 
-    Both architectures attend to nitrogen environments and heteroatom
-    functional groups -- substructures governing CYP-mediated metabolic
-    stability.
+For PAMPA (passive membrane permeability), we expect important features
+to relate to lipophilicity, molecular size, and hydrogen bond donors --
+distinct from the CYP-metabolism features that dominate the HLM figure.
             """),
         ]
     )

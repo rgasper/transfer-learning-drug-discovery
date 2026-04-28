@@ -1,8 +1,17 @@
 # Transfer Learning for Drug Discovery: NCATS ADME
 
+
+
+TODO this openinng paragraph sucks and assumes the reader really knows internals of ml models
+
+TODO we need a primer (with images or diagrams please!) of the model architectures, and the basic ideas of the mechanics of transfer learning. 
+
+TODO we need a primer of the idea of the difference of what the embedded layers in a neural net learn versus what the final decision layers learn
+
+TODO we don't need to directly link pat walters methodology right at the top. put a references section at the bottom. there's a paper on chemarxiv we can reference not just the blog post
+
 When does pre-training on one biological endpoint help predict another?
-When does it actively hurt? And does the answer depend on whether your
-model learns *representations* or *decision boundaries*?
+When does it actively hurt? And does the answer depend on whether your model learns *representations* or *decision boundaries*?
 
 This project investigates transfer learning for small-molecule property
 prediction using three NCATS ADME endpoints, comparing architectures that
@@ -31,18 +40,15 @@ Three NCATS ADME endpoints curated from PubChem BioAssay (public subsets):
 | HLM Stability | Related finetune target | 900 | 542 (stable) | 358 (unstable) | 60% / 40% |
 | PAMPA pH 7.4 | Unrelated finetune target | 2,033 | 1,738 (permeable) | 295 (impermeable) | 86% / 14% |
 
-Eight model variants span two axes -- architecture and transfer strategy:
+Three architectures, each tested with and without RLM pre-training:
 
-| # | Model | Architecture | Params | Transfer Strategy |
-|---|---|---|---|---|
-| 1 | XGBoost scratch | Gradient-boosted trees | -- | None (Morgan FP 2048-bit r3) |
-| 2 | XGBoost RLM-transfer | Gradient-boosted trees | -- | Continue boosting from RLM model |
-| 3 | Chemprop scratch | D-MPNN (random init) | 318K | None |
-| 4 | Chemprop RLM-transfer | D-MPNN (RLM init) | 318K | Pre-train on RLM, new FFN head |
-| 5 | CheMeleon single-finetune | D-MPNN (foundation init) | 9.3M | Foundation -> target (all weights) |
-| 6 | CheMeleon double-finetune | D-MPNN (foundation init) | 9.3M | Foundation -> RLM -> target (all weights) |
-| 7 | CheMeleon frozen single | D-MPNN (foundation init) | 615K trainable / 8.7M frozen | Foundation -> target (FFN only) |
-| 8 | CheMeleon frozen double | D-MPNN (foundation init) | 615K trainable / 8.7M frozen | Foundation -> RLM -> target (FFN only) |
+- **XGBoost** on 2048-bit Morgan fingerprints (radius 3). Transfer means
+  continuing boosting from the RLM-trained model.
+- **Chemprop D-MPNN** (318K parameters). Transfer means loading
+  RLM-pretrained encoder weights and re-initializing the FFN head.
+- **CheMeleon** (9.3M parameters), a D-MPNN foundation model pre-trained
+  on 1M PubChem compounds. Tested with full finetuning and with the
+  encoder frozen (615K trainable parameters).
 
 **No hyperparameter tuning was performed.** All models use default or
 near-default configurations. Chemprop uses library defaults throughout
@@ -109,29 +115,46 @@ the source dataset.
 
 ### Results across all architectures
 
-| Model | AUC-PR (mean +/- std) | Best group | Delta from scratch |
-|---|---|---|---|
-| XGBoost scratch | 0.739 +/- 0.048 | | -- |
-| XGBoost RLM-transfer | 0.789 +/- 0.049 | * | +0.049 |
-| Chemprop scratch | 0.793 +/- 0.037 | | -- |
-| CheMeleon single-finetune | 0.790 +/- 0.044 | | -- |
-| CheMeleon double-finetune | 0.806 +/- 0.032 | * | +0.016 |
-| CheMeleon frozen double | 0.819 +/- 0.034 | * | -- |
-| CheMeleon frozen single | 0.819 +/- 0.035 | * | -- |
-| **Chemprop RLM-transfer** | **0.831 +/- 0.035** | **\*** | **+0.038** |
+Eight model variants, spanning the three architectures with and without
+RLM pre-training:
+
+| Model | Architecture | Transfer Strategy | AUC-PR (mean +/- std) | Best group |
+|---|---|---|---|---|
+| XGBoost scratch | Gradient-boosted trees | None (Morgan FP) | 0.739 +/- 0.048 | |
+| XGBoost RLM-transfer | Gradient-boosted trees | Continue boosting from RLM | 0.789 +/- 0.049 | |
+| CheMeleon single-finetune | D-MPNN foundation (9.3M) | Foundation -> HLM (all weights) | 0.790 +/- 0.044 | |
+| Chemprop scratch | D-MPNN (318K) | None | 0.793 +/- 0.037 | |
+| CheMeleon double-finetune | D-MPNN foundation (9.3M) | Foundation -> RLM -> HLM (all weights) | 0.806 +/- 0.032 | * |
+| CheMeleon frozen double | D-MPNN foundation (615K trainable) | Foundation -> RLM -> HLM (FFN only) | 0.819 +/- 0.034 | * |
+| CheMeleon frozen single | D-MPNN foundation (615K trainable) | Foundation -> HLM (FFN only) | 0.819 +/- 0.035 | * |
+| **Chemprop RLM-transfer** | **D-MPNN (318K)** | **Pre-train on RLM, new FFN head** | **0.831 +/- 0.035** | **\*** |
 
 \* Not statistically significantly different from the best model (Tukey
 HSD, FWER = 0.05).
 
-Transfer helps *every* architecture: +0.049 for XGBoost, +0.038 for
-Chemprop, +0.016 for CheMeleon (single -> double finetune). The benefit
-is large enough to reach statistical significance for the Chemprop pair
-(p = 0.022, Tukey HSD on AUC-PR). The XGBoost improvement is
-particularly notable given that XGBoost learned the RLM source task
-significantly worse than the D-MPNN architectures (see [Validating the
-starting point](#validating-the-starting-point)) -- even a weaker source
-model transfers useful knowledge when the source and target share
-underlying biochemistry.
+![HLM boxplots](docs/figures/boxplots-hlm-auc-pr.png)
+
+![Tukey HSD HLM](docs/figures/tukey-hsd-hlm-auc-pr.png)
+
+Transfer helps *every* architecture. Comparing each transfer variant to
+its own scratch baseline: XGBoost gains +0.049 (0.739 -> 0.789),
+Chemprop gains +0.038 (0.793 -> 0.831), and CheMeleon gains +0.016
+(single-finetune 0.790 -> double-finetune 0.806). The Chemprop
+improvement is statistically significant (p = 0.022, Tukey HSD). The
+XGBoost improvement is particularly notable given that XGBoost learned
+the RLM source task significantly worse than the D-MPNN architectures
+(see [Validating the starting point](#validating-the-starting-point)) --
+even a weaker source model transfers useful knowledge when the source
+and target share underlying biochemistry.
+
+Key pairwise comparisons (Tukey HSD, FWER = 0.05):
+
+- Chemprop RLM-transfer vs CheMeleon frozen single: not significant
+  (p = 0.96). The top models are statistically indistinguishable.
+- Chemprop RLM-transfer vs Chemprop scratch: significant (p = 0.022).
+  Transfer learning helps.
+- Chemprop RLM-transfer vs XGBoost scratch: significant (p < 0.001).
+  Largest gap.
 
 ### What the models learn: shared structural rules
 
@@ -142,7 +165,7 @@ learn which *types* of substructures make a molecule metabolically
 vulnerable -- knowledge that transfers across species because the
 underlying enzymatic chemistry is conserved.
 
-![Correlation scatter](docs/figures/eda-correlation-scatter.png)
+![RLM vs HLM correlation](docs/figures/eda-correlation-rlm-hlm.png)
 
 To make this concrete, we computed feature importance for both
 architectures on HLM: SHAP values for XGBoost's Morgan fingerprint bits
@@ -162,23 +185,6 @@ on molecular graphs) is evidence that both learn genuine
 structure-activity rules governing metabolic stability, not
 dataset-specific artifacts -- and these are exactly the rules that
 transfer from RLM to HLM.
-
-### Key pairwise statistics (Tukey HSD, FWER = 0.05)
-
-- Chemprop RLM-transfer vs CheMeleon frozen single: not significant
-  (p = 0.96). The top models are statistically indistinguishable.
-- Chemprop RLM-transfer vs Chemprop scratch: significant (p = 0.022).
-  Transfer learning helps.
-- Chemprop RLM-transfer vs XGBoost scratch: significant (p < 0.001).
-  Largest gap.
-
-![All models boxplots](docs/figures/all-models-boxplots.png)
-
-![Tukey HSD HLM](docs/figures/tukey-hsd-hlm-auc-pr.png)
-
-Tukey HSD simultaneous confidence intervals for HLM (AUC-PR, FWER = 0.05).
-The reference model (highest mean) is highlighted. Groups colored red are
-significantly different from the reference; gray groups are not.
 
 ---
 
@@ -206,26 +212,43 @@ harm must come from *wrong* learned associations being inherited.
 |---|---|---|---|---|
 | RLM ∩ PAMPA | 2,023 | 99.5% | 1,385 | 99.6% |
 
-![Correlation scatter](docs/figures/eda-correlation-scatter.png)
+![RLM vs PAMPA correlation](docs/figures/eda-correlation-rlm-pampa.png)
 
-RLM vs PAMPA (left panel) shows no correlation -- mechanistically
-distinct endpoints.
+No correlation between RLM half-life and PAMPA permeability --
+mechanistically distinct endpoints.
+
+What does a model *correctly* trained on PAMPA attend to? The scratch
+models (trained without RLM transfer) provide the answer:
+
+![PAMPA feature importance](docs/figures/pampa-feature-importance.png)
+
+Both architectures attend to lipophilic fragments and aromatic systems --
+structural features governing passive membrane permeability. These are
+fundamentally different from the nitrogen-rich CYP-substrate environments
+that dominate the HLM figure. This contrast is what makes the RLM->PAMPA
+transfer so destructive for XGBoost: the pre-trained model inherits
+attention to metabolic-vulnerability features that are irrelevant (or
+anti-correlated) with permeability.
 
 ### The XGBoost catastrophe
 
-| Model | AUC-PR (mean +/- std) | Best group |
-|---|---|---|
-| XGBoost RLM-transfer | 0.853 +/- 0.045 | |
-| CheMeleon single-finetune | 0.908 +/- 0.029 | * |
-| XGBoost scratch | 0.910 +/- 0.030 | * |
-| CheMeleon double-finetune | 0.912 +/- 0.025 | * |
-| Chemprop scratch | 0.917 +/- 0.030 | * |
-| CheMeleon frozen single | 0.921 +/- 0.029 | * |
-| CheMeleon frozen double | 0.922 +/- 0.029 | * |
-| **Chemprop RLM-transfer** | **0.925 +/- 0.026** | **\*** |
+| Model | Architecture | Transfer Strategy | AUC-PR (mean +/- std) | Best group |
+|---|---|---|---|---|
+| XGBoost RLM-transfer | Gradient-boosted trees | Continue boosting from RLM | 0.853 +/- 0.045 | |
+| CheMeleon single-finetune | D-MPNN foundation (9.3M) | Foundation -> PAMPA (all weights) | 0.908 +/- 0.029 | * |
+| XGBoost scratch | Gradient-boosted trees | None (Morgan FP) | 0.910 +/- 0.030 | * |
+| CheMeleon double-finetune | D-MPNN foundation (9.3M) | Foundation -> RLM -> PAMPA (all weights) | 0.912 +/- 0.025 | * |
+| Chemprop scratch | D-MPNN (318K) | None | 0.917 +/- 0.030 | * |
+| CheMeleon frozen single | D-MPNN foundation (615K trainable) | Foundation -> PAMPA (FFN only) | 0.921 +/- 0.029 | * |
+| CheMeleon frozen double | D-MPNN foundation (615K trainable) | Foundation -> RLM -> PAMPA (FFN only) | 0.922 +/- 0.029 | * |
+| **Chemprop RLM-transfer** | **D-MPNN (318K)** | **Pre-train on RLM, new FFN head** | **0.925 +/- 0.026** | **\*** |
 
 \* Not statistically significantly different from the best model (Tukey
 HSD, FWER = 0.05).
+
+![PAMPA boxplots](docs/figures/boxplots-pampa-auc-pr.png)
+
+![Tukey HSD PAMPA](docs/figures/tukey-hsd-pampa-auc-pr.png)
 
 The PAMPA random baseline is 0.855 (positive class prevalence). XGBoost
 RLM-transfer (0.853) performs *at or below* the random baseline --
@@ -246,12 +269,6 @@ The transfer effect by architecture tells the story:
 | Chemprop | +0.008 (slight improvement) |
 | CheMeleon (single -> double) | +0.004 (negligible) |
 
-![Tukey HSD PAMPA](docs/figures/tukey-hsd-pampa-auc-pr.png)
-
-Tukey HSD simultaneous confidence intervals for PAMPA (AUC-PR, FWER = 0.05).
-XGBoost RLM-transfer is the sole red outlier -- significantly worse than
-the reference. All other models are statistically indistinguishable.
-
 ### Why: decision boundaries vs. representations
 
 The difference comes from *where* transfer happens in each architecture.
@@ -264,9 +281,7 @@ boundaries (PAMPA), the existing trees actively mislead the model -- it
 starts from a wrong baseline, and the new trees must first undo the RLM
 predictions before learning PAMPA patterns.
 
-An [ablation experiment](docs/xgb-transfer-ablation.md) confirms this
-damage is structural and irrecoverable: increasing the finetuning budget
-from 200 to 1000 rounds produces no improvement, because inherited trees
+An [ablation experiment](docs/xgb-transfer-ablation.md) confirms this damage to the xgboost performance on PAMPA by training on RLM target first is structural and irrecoverable: increasing the finetuning budget from 200 to 1000 rounds produces no improvement, because inherited trees
 permanently contribute to predictions and cannot be deleted or modified
 by subsequent boosting.
 
@@ -736,6 +751,7 @@ xfer-learning/
     09-chemprop-saliency.py            # Marimo: Chemprop gradient saliency
     10-hlm-importance.py               # Marimo: HLM feature importance (XGBoost + Chemprop)
     11-rlm-base-comparison.py          # Marimo: RLM base model equivalence validation
+    12-pampa-importance.py             # Marimo: PAMPA feature importance (XGBoost + Chemprop)
   scripts/
     run-chemprop-training.py           # Chemprop CV training with disk caching
     run-chemeleon-training.py          # CheMeleon CV training with disk caching
@@ -781,6 +797,7 @@ uv run marimo edit notebooks/08-failure-analysis.py
 uv run marimo edit notebooks/09-chemprop-saliency.py
 uv run marimo edit notebooks/10-hlm-importance.py
 uv run marimo edit notebooks/11-rlm-base-comparison.py
+uv run marimo edit notebooks/12-pampa-importance.py
 ```
 
 ## References
