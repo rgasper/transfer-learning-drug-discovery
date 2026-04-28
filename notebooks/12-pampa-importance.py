@@ -91,7 +91,16 @@ def _(DATA_DIR, logger, np):
 
 
 @app.cell
-def _(logger, np, pampa_X, pampa_folds, pampa_labels, roc_auc_score, shap, xgb):
+def _(
+    logger,
+    np,
+    pampa_X,
+    pampa_folds,
+    pampa_labels,
+    roc_auc_score,
+    shap,
+    xgb,
+):
     """Train XGBoost on PAMPA (rep 0, fold 0) and compute SHAP values."""
     _fold_assign = pampa_folds[0]
     xgb_test_mask = _fold_assign == 0
@@ -144,7 +153,6 @@ def _(logger, np, pampa_X, pampa_folds, pampa_labels, roc_auc_score, shap, xgb):
 def _(
     Chem,
     logger,
-    np,
     pampa_smiles,
     rdFingerprintGenerator,
     xgb_shap_values,
@@ -531,19 +539,19 @@ def _(
             mo.md("## Combined PAMPA Feature Importance"),
             mo.as_html(_fig),
             mo.md(f"""
-**Left (XGBoost):** Top 15 Morgan fingerprint bits ranked by mean |SHAP|
-on PAMPA test molecules. Each fragment shows the Morgan radius-3
-neighborhood from the test molecule where that bit had the highest SHAP
-contribution. Blue = pushes toward "permeable"; red = "impermeable."
+    **Left (XGBoost):** Top 15 Morgan fingerprint bits ranked by mean |SHAP|
+    on PAMPA test molecules. Each fragment shows the Morgan radius-3
+    neighborhood from the test molecule where that bit had the highest SHAP
+    contribution. Blue = pushes toward "permeable"; red = "impermeable."
 
-**Right (Chemprop):** Top 15 atom types ranked by mean normalized
-gradient saliency across 100 sampled PAMPA test molecules. Each fragment
-shows the 2-bond neighborhood around the highest-saliency instance of
-that atom type (center atom highlighted in blue). Error bars = SEM.
+    **Right (Chemprop):** Top 15 atom types ranked by mean normalized
+    gradient saliency across 100 sampled PAMPA test molecules. Each fragment
+    shows the 2-bond neighborhood around the highest-saliency instance of
+    that atom type (center atom highlighted in blue). Error bars = SEM.
 
-For PAMPA (passive membrane permeability), we expect important features
-to relate to lipophilicity, molecular size, and hydrogen bond donors --
-distinct from the CYP-metabolism features that dominate the HLM figure.
+    For PAMPA (passive membrane permeability), we expect important features
+    to relate to lipophilicity, molecular size, and hydrogen bond donors --
+    distinct from the CYP-metabolism features that dominate the HLM figure.
             """),
         ]
     )
