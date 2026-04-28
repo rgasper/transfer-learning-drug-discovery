@@ -102,6 +102,7 @@ def _(
     xgb,
 ):
     """Train XGBoost on PAMPA (rep 0, fold 0) and compute SHAP values."""
+    np.random.seed(42)
     _fold_assign = pampa_folds[0]
     xgb_test_mask = _fold_assign == 0
     _train_mask = ~xgb_test_mask
@@ -118,6 +119,7 @@ def _(
             "subsample": 0.8,
             "colsample_bytree": 0.8,
             "random_state": 42,
+            "nthread": 1,
             "verbosity": 0,
         },
         _dtrain,
@@ -137,7 +139,7 @@ def _(
 
     xgb_mean_abs_shap = np.abs(xgb_shap_values).mean(axis=0)
     xgb_mean_signed_shap = xgb_shap_values.mean(axis=0)
-    xgb_top_bits = np.argsort(xgb_mean_abs_shap)[-15:][::-1]
+    xgb_top_bits = np.argsort(xgb_mean_abs_shap)[-6:][::-1]
 
     logger.info(f"Top 15 bits: {xgb_top_bits.tolist()}")
     return (
@@ -259,10 +261,12 @@ def _(
     _ffn = nn.BinaryClassificationFFN(input_dim=_mp.output_dim)
     _model = models.MPNN(_mp, _agg, _ffn, batch_norm=False)
 
+    lightning_pl.seed_everything(42, workers=True)
     _trainer = lightning_pl.Trainer(
         logger=False,
         enable_checkpointing=False,
         enable_progress_bar=False,
+        deterministic=True,
         accelerator="gpu",
         devices=1,
         max_epochs=30,
@@ -334,7 +338,7 @@ def _(
     }
     chemprop_top_atom_types = sorted(
         chemprop_atom_means.keys(), key=lambda k: chemprop_atom_means[k], reverse=True
-    )[:15]
+    )[:6]
     return (
         chemprop_atom_means,
         chemprop_atom_stderrs,

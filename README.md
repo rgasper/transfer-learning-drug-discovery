@@ -6,7 +6,7 @@ TODO this openinng paragraph sucks and assumes the reader really knows internals
 
 TODO we need a primer (with images or diagrams please!) of the model architectures, and the basic ideas of the mechanics of transfer learning. 
 
-TODO we need a primer of the idea of the difference of what the embedded layers in a neural net learn versus what the final decision layers learn
+TODO we need a primer of the idea of the difference of what the embedded layers in a neural net learn versus what the final decision layers learn, and how that's different thatn what xgboost does
 
 TODO we don't need to directly link pat walters methodology right at the top. put a references section at the bottom. there's a paper on chemarxiv we can reference not just the blog post
 
