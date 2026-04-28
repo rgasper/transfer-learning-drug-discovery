@@ -2,7 +2,7 @@
 
 
 
-TODO this openinng paragraph sucks and assumes the reader really knows internals of ml models
+TODO the openinng paragraph sucks and assumes the reader really knows internals of ml models. the root question we're trying to address here is the counterintuitive and true result that a properly setup transfer-learning on a deep neural net can make a model perform better when it learns data from two different uncorrelated targets. the whole document should be approachable to a non-expert audience; the optneing in particular! add these to references and remark in the relevant discussion sections.     1.Liu, R., Laxminarayan, S., Reifman, J. & Wallqvist, A. Enabling data-limited chemical bioactivity predictions through deep neural network transfer learning. *J Comput Aid Mol Des* **36**, 867–878 (2022).  ,     1.Li, X. & Fourches, D. Inductive transfer learning for molecular activity prediction: Next-Gen QSAR Models with MolPMoFiT. *J Cheminformatics* **12**, 27 (2020).  and     1.Cai, C. *et al.* Transfer Learning for Drug Discovery. *J Med Chem* **63**, 8683–8694 (2020). 
 
 TODO we need a primer (with images or diagrams please!) of the model architectures, and the basic ideas of the mechanics of transfer learning. 
 
@@ -42,7 +42,8 @@ Three NCATS ADME endpoints curated from PubChem BioAssay (public subsets):
 
 Three architectures, each tested with and without RLM pre-training:
 
-- **XGBoost** on 2048-bit Morgan fingerprints (radius 3). Transfer means
+- **XGBoost** on 2048-bit Morgan fingerprints (radius 3). ~3K effective
+  parameters (50 trees after early stopping, max depth 6). Transfer means
   continuing boosting from the RLM-trained model.
 - **Chemprop D-MPNN** (318K parameters). Transfer means loading
   RLM-pretrained encoder weights and re-initializing the FFN head.
@@ -124,8 +125,8 @@ RLM pre-training:
 
 | Model | Architecture | Transfer Strategy | AUC-PR (mean +/- std) | Best group |
 |---|---|---|---|---|
-| XGBoost scratch | Gradient-boosted trees | None (Morgan FP) | 0.739 +/- 0.048 | |
-| XGBoost RLM-transfer | Gradient-boosted trees | Continue boosting from RLM | 0.789 +/- 0.049 | |
+| XGBoost scratch | Gradient-boosted trees (~3K) | None (Morgan FP) | 0.739 +/- 0.048 | |
+| XGBoost RLM-transfer | Gradient-boosted trees (~3K) | Continue boosting from RLM | 0.789 +/- 0.049 | |
 | CheMeleon single-finetune | D-MPNN foundation (9.3M) | Foundation -> HLM (all weights) | 0.790 +/- 0.044 | |
 | Chemprop scratch | D-MPNN (318K) | None | 0.793 +/- 0.037 | |
 | CheMeleon double-finetune | D-MPNN foundation (9.3M) | Foundation -> RLM -> HLM (all weights) | 0.806 +/- 0.032 | * |
@@ -312,9 +313,9 @@ PAMPA target, unconstrained by old decision boundaries.
 
 | Model | Architecture | Transfer Strategy | AUC-PR (mean +/- std) | Best group |
 |---|---|---|---|---|
-| XGBoost RLM-transfer | Gradient-boosted trees | Continue boosting from RLM | 0.853 +/- 0.045 | |
+| XGBoost RLM-transfer | Gradient-boosted trees (~3K) | Continue boosting from RLM | 0.853 +/- 0.045 | |
 | CheMeleon single-finetune | D-MPNN foundation (9.3M) | Foundation -> PAMPA (all weights) | 0.908 +/- 0.029 | * |
-| XGBoost scratch | Gradient-boosted trees | None (Morgan FP) | 0.910 +/- 0.030 | * |
+| XGBoost scratch | Gradient-boosted trees (~3K) | None (Morgan FP) | 0.910 +/- 0.030 | * |
 | CheMeleon double-finetune | D-MPNN foundation (9.3M) | Foundation -> RLM -> PAMPA (all weights) | 0.912 +/- 0.025 | * |
 | Chemprop scratch | D-MPNN (318K) | None | 0.917 +/- 0.030 | * |
 | CheMeleon frozen single | D-MPNN foundation (615K trainable) | Foundation -> PAMPA (FFN only) | 0.921 +/- 0.029 | * |
@@ -940,6 +941,7 @@ xfer-learning/
     12-pampa-importance.py             # Marimo: PAMPA feature importance (XGBoost + Chemprop)
     13-chemeleon-pampa-importance.py   # Marimo: CheMeleon frozen single vs double on PAMPA
     14-reverse-transfer.py             # Marimo: Reverse experiment (PAMPA → RLM)
+    15-data-efficiency.py              # Marimo: Data efficiency (10-100% training data)
   scripts/
     run-chemprop-training.py           # Chemprop CV training with disk caching
     run-chemeleon-training.py          # CheMeleon CV training with disk caching
@@ -989,6 +991,7 @@ uv run marimo edit notebooks/11-rlm-base-comparison.py
 uv run marimo edit notebooks/12-pampa-importance.py
 uv run marimo edit notebooks/13-chemeleon-pampa-importance.py
 uv run marimo edit notebooks/14-reverse-transfer.py
+uv run marimo edit notebooks/15-data-efficiency.py
 ```
 
 ## References
