@@ -184,48 +184,42 @@ despite shared biochemistry -- transfer benefit comes from structural
 rules, not shared data points.*
 
 To make this concrete, we computed feature importance for both
-architectures on HLM: SHAP values for XGBoost's Morgan fingerprint bits
-and per-atom gradient saliency for Chemprop's D-MPNN.
-
-![HLM feature importance](docs/figures/hlm-feature-importance.png)
-
-*Left (XGBoost): Top 6 Morgan FP bits by mean |SHAP| on HLM test
-molecules. Fragment = radius-3 neighborhood from the molecule where that
-bit contributed most. Blue = pushes toward "stable"; red = "unstable."
-Right (Chemprop): Top 6 atom types by mean gradient saliency across all
-HLM test molecules. Fragment = 1-bond neighborhood around the
-highest-saliency instance (center atom highlighted blue). Error bars = SEM.
-Results shown are from a single train/test fold; specific rankings may
-vary with a different fold, though the overall pattern (heteroatom
-environments dominating) is consistent.*
-
-Both architectures converge on the same structural story. XGBoost's top
-SHAP features (left) highlight Morgan fingerprint bits corresponding to
-aromatic ring environments and heteroatom-containing functional groups --
-the substructural features known to govern CYP-mediated oxidative
-metabolism. Chemprop's atom-type saliency (right) mirrors this: aromatic
-carbons and nitrogen-containing environments dominate the model's
-attention. This convergence across fundamentally different model types
-(tree ensemble on fixed fingerprints vs. message-passing neural network
-on molecular graphs) is evidence that both learn genuine
-structure-activity rules governing metabolic stability, not
-dataset-specific artifacts -- and these are exactly the rules that
-transfer from RLM to HLM.
-
-We can also compare how features shift between the scratch and transfer
-variants of each architecture:
+architectures on HLM and compared how they shift with transfer:
 
 ![HLM XGBoost scratch vs transfer](docs/figures/hlm-xgb-scratch-vs-transfer.png)
 
-*XGBoost: top 6 SHAP features before and after RLM transfer. Shared bits
-between panels indicate features important to both; the transfer model
-inherits useful metabolic-stability signals that align with HLM.*
+*XGBoost: top 6 SHAP features before and after RLM transfer. Single
+fold; rankings may vary with different test sets.*
+
+The scratch and transfer models share 3 of their top 6 bits (1171, 1722,
+1088), all pushing toward "stable" (blue). These correspond to
+alkyl/alkenyl carbon environments -- saturated or low-electron-density
+fragments that lack CYP-vulnerable soft spots. The transfer model
+promotes Bit 1088 from #4 to #1, more than doubling its SHAP magnitude.
+This bit's substructure (a branched alkenyl chain with sulfur) is a
+metabolic stability motif that the RLM pre-training made the model more
+confident about. Bit 1199 flips from blue (scratch) to red (transfer) --
+the transfer model learned from RLM that this fragment correlates with
+instability, and this association carried over to HLM where it's also
+correct. The overall pattern: RLM transfer amplifies and refines existing
+metabolic-stability features rather than introducing alien ones, which
+is exactly why it helps.
 
 ![HLM Chemprop scratch vs transfer](docs/figures/hlm-chemprop-scratch-vs-transfer.png)
 
 *Chemprop: top 6 atom types by saliency before and after RLM transfer.
-Similar rankings confirm the pre-trained encoder preserves attention to
-the same structural environments after transfer.*
+Single fold; rankings may vary with different test sets.*
+
+The Chemprop panels show substantial overlap in atom types (N deg1, N
+deg2, N deg3, P deg4 all appear in both) but with a notable shift: the
+transfer model elevates sulfur environments (S deg3, S deg1) to top
+positions. This is chemically sensible -- thioethers and sulfonamides are
+known CYP substrates and their metabolic lability transfers across
+species. The scratch model focuses more narrowly on nitrogen
+environments; the transfer model broadens attention to include
+sulfur-containing motifs that RLM pre-training surfaced. Both models
+ignore aromatic carbons (which are metabolically inert unless activated),
+confirming they learn genuine SAR rather than dataset artifacts.
 
 ---
 
@@ -262,40 +256,57 @@ endpoints measure fundamentally different physical processes.*
 No correlation between RLM half-life and PAMPA permeability --
 mechanistically distinct endpoints.
 
-What does a model *correctly* trained on PAMPA attend to? The scratch
-models (trained without RLM transfer) provide the answer:
-
-![PAMPA feature importance](docs/figures/pampa-feature-importance.png)
-
-*Same methodology as the HLM figure. Left (XGBoost): Top 6 Morgan FP
-bits by mean |SHAP|. Blue = "permeable"; red = "impermeable." Right
-(Chemprop): Top 6 atom types by mean gradient saliency across all PAMPA
-test molecules. Single fold; specific rankings may shift with different
-test sets.*
-
-Both architectures attend to lipophilic fragments and aromatic systems --
-structural features governing passive membrane permeability. These are
-fundamentally different from the nitrogen-rich CYP-substrate environments
-that dominate the HLM figure. This contrast is what makes the RLM->PAMPA
-transfer so destructive for XGBoost: the pre-trained model inherits
-attention to metabolic-vulnerability features that are irrelevant (or
-anti-correlated) with permeability.
-
-Comparing scratch vs transfer variants makes this visible:
+What does a model *correctly* trained on PAMPA attend to, and how does
+transfer change that? Comparing scratch vs transfer variants makes this
+visible:
 
 ![PAMPA XGBoost scratch vs transfer](docs/figures/pampa-xgb-scratch-vs-transfer.png)
 
-*XGBoost: top 6 SHAP features before and after RLM transfer. The
-transfer model attends to different bits and often pushes in the opposite
-direction (same bit, different color) -- inherited RLM associations
-conflict with PAMPA permeability signals.*
+*XGBoost: top 6 SHAP features before and after RLM transfer. Single
+fold; rankings may vary with different test sets.*
+
+The scratch model's top feature (Bit 807, blue) corresponds to a
+hydroxyl-bearing fragment and pushes toward "permeable" -- consistent
+with the known effect of moderate lipophilicity aiding membrane crossing.
+The remaining scratch features are predominantly red (impermeable),
+corresponding to nitrogen-containing heterocycles (Bits 168, 1480) and
+amide fragments (Bit 1917) that increase polarity and reduce passive
+permeability.
+
+The transfer model retains Bit 807 as its strongest feature (still blue,
+still correct), and Bit 168 (a nitrogen heterocycle, red/impermeable)
+also appears in both panels. But the transfer model's remaining top
+features are largely different: Bits 169 and 650 are nitrogen
+heterocycles pushed toward "impermeable" with higher magnitude than
+anything in the scratch model's lower-ranked features. These are RLM-
+inherited features: nitrogen heterocycles are CYP substrates
+(metabolically *unstable* in RLM → "inactive" label), and the transfer
+model carries over this "inactive" association to PAMPA where it
+translates to "impermeable." For some compounds this inherited bias
+happens to be correct (polar N-heterocycles *are* often impermeable),
+but for others -- lipophilic N-heterocycles that are actually permeable
+-- it produces catastrophically wrong predictions. The net effect is that
+the transfer model over-relies on RLM-derived nitrogen-heterocycle
+signals at the expense of the lipophilicity features that actually govern
+permeability.
 
 ![PAMPA Chemprop scratch vs transfer](docs/figures/pampa-chemprop-scratch-vs-transfer.png)
 
 *Chemprop: top 6 atom types by saliency before and after RLM transfer.
-Near-identical rankings confirm the D-MPNN transfer does not distort
-attention patterns, even from a mechanistically unrelated source. The new
-FFN head learns the correct mapping without inheriting bias.*
+Single fold; rankings may vary with different test sets.*
+
+The Chemprop panels show near-complete overlap: S deg2, N deg2, N deg3,
+and O(arom) deg2 appear in both top-6 lists. The rankings shift slightly
+(S deg2 stays #1 in both; the transfer model adds I deg1 and elevates
+S deg1), but the fundamental attention pattern is preserved. The model
+still attends to the same heteroatom environments that govern
+permeability. This confirms the architectural thesis: because Chemprop's
+transfer replaces the FFN head entirely, the encoder's learned attention
+pattern is not contaminated by the RLM objective. The encoder features
+(sulfur environments, aromatic oxygens, nitrogen donors) are general
+molecular descriptors useful for *many different property predictions* -- the new
+FFN head simply learns a different mapping from these features to the
+PAMPA target, unconstrained by old decision boundaries.
 
 ### The XGBoost catastrophe
 
