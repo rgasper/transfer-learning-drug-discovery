@@ -191,7 +191,6 @@ def _(average_precision_score, np, roc_auc_score, xgb):
             _metrics["avg_precision"] = float("nan")
         return _metrics
 
-
     return (
         N_BOOST_ROUNDS,
         XGB_PARAMS,
@@ -220,7 +219,9 @@ def _(
         num_boost_round=N_BOOST_ROUNDS,
         verbose_eval=False,
     )
-    logger.info(f"RLM pretrained model: {rlm_pretrained_model.num_boosted_rounds()} rounds")
+    logger.info(
+        f"RLM pretrained model: {rlm_pretrained_model.num_boosted_rounds()} rounds"
+    )
     return (rlm_pretrained_model,)
 
 
@@ -259,28 +260,38 @@ def _(
                 _y_train, _y_test = _y[_train_mask], _y[_test_mask]
 
                 # From scratch
-                _model_scratch = train_xgb_from_scratch(_X_train, _y_train, _X_test, _y_test)
+                _model_scratch = train_xgb_from_scratch(
+                    _X_train, _y_train, _X_test, _y_test
+                )
                 _metrics_scratch = evaluate_model(_model_scratch, _X_test, _y_test)
-                all_results.append({
-                    "target": _target_name,
-                    "model": "XGBoost scratch",
-                    "replicate": _rep,
-                    "fold": _fold,
-                    **_metrics_scratch,
-                })
+                all_results.append(
+                    {
+                        "target": _target_name,
+                        "model": "XGBoost scratch",
+                        "replicate": _rep,
+                        "fold": _fold,
+                        **_metrics_scratch,
+                    }
+                )
 
                 # Transfer from RLM
                 _model_transfer = train_xgb_transfer(
-                    _X_train, _y_train, _X_test, _y_test, rlm_pretrained_model,
+                    _X_train,
+                    _y_train,
+                    _X_test,
+                    _y_test,
+                    rlm_pretrained_model,
                 )
                 _metrics_transfer = evaluate_model(_model_transfer, _X_test, _y_test)
-                all_results.append({
-                    "target": _target_name,
-                    "model": "XGBoost RLM-transfer",
-                    "replicate": _rep,
-                    "fold": _fold,
-                    **_metrics_transfer,
-                })
+                all_results.append(
+                    {
+                        "target": _target_name,
+                        "model": "XGBoost RLM-transfer",
+                        "replicate": _rep,
+                        "fold": _fold,
+                        **_metrics_transfer,
+                    }
+                )
 
         logger.info(f"  Completed {N_REPLICATES * N_FOLDS} folds for {_target_name}")
 
@@ -302,8 +313,7 @@ def _(mo):
 def _(mo, pl, results_df):
     # Summary statistics
     _summary = (
-        results_df
-        .group_by("target", "model")
+        results_df.group_by("target", "model")
         .agg(
             pl.col("auc_roc").mean().alias("auc_roc_mean"),
             pl.col("auc_roc").std().alias("auc_roc_std"),
@@ -314,10 +324,12 @@ def _(mo, pl, results_df):
         .sort("target", "model")
     )
 
-    mo.vstack([
-        mo.md("### Mean Metrics (25 folds)"),
-        mo.ui.table(_summary),
-    ])
+    mo.vstack(
+        [
+            mo.md("### Mean Metrics (25 folds)"),
+            mo.ui.table(_summary),
+        ]
+    )
     return
 
 
@@ -325,28 +337,43 @@ def _(mo, pl, results_df):
 def _(mo, pl, results_df):
     import matplotlib.pyplot as plt
     import seaborn as sns
+    from pathlib import Path
 
-    # Boxplots of AUC-ROC by model and target
-    _fig_box, _axes_box = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+    FIGURES_DIR = Path("docs/figures")
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Boxplots of AUC-PR by model and target
+    _fig_box, _axes_box = plt.subplots(1, 2, figsize=(14, 5), sharey=False)
 
     for _i, _target in enumerate(["HLM Stability", "PAMPA pH 7.4"]):
         _subset = results_df.filter(pl.col("target") == _target).to_pandas()
         sns.boxplot(
-            data=_subset, x="model", y="auc_roc", ax=_axes_box[_i],
+            data=_subset,
+            x="model",
+            y="avg_precision",
+            ax=_axes_box[_i],
             palette={"XGBoost scratch": "#FF5722", "XGBoost RLM-transfer": "#2196F3"},
         )
         _axes_box[_i].set_title(_target)
         _axes_box[_i].set_xlabel("")
-        _axes_box[_i].set_ylabel("AUC-ROC" if _i == 0 else "")
+        _axes_box[_i].set_ylabel("AUC-PR" if _i == 0 else "")
         _axes_box[_i].tick_params(axis="x", rotation=15)
 
     _fig_box.suptitle("XGBoost: From Scratch vs RLM Transfer (25 folds)", fontsize=14)
     plt.tight_layout()
+    _fig_box.savefig(
+        FIGURES_DIR / "xgb-boxplots.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor="white",
+    )
 
-    mo.vstack([
-        mo.md("### AUC-ROC Distributions"),
-        mo.as_html(_fig_box),
-    ])
+    mo.vstack(
+        [
+            mo.md("### AUC-PR Distributions"),
+            mo.as_html(_fig_box),
+        ]
+    )
     return (plt,)
 
 
@@ -359,17 +386,20 @@ def _(mo, np, pl, plt, results_df):
 
     for _i, _target in enumerate(["HLM Stability", "PAMPA pH 7.4"]):
         _scratch = (
-            results_df
-            .filter((pl.col("target") == _target) & (pl.col("model") == "XGBoost scratch"))
+            results_df.filter(
+                (pl.col("target") == _target) & (pl.col("model") == "XGBoost scratch")
+            )
             .sort("replicate", "fold")
-            .get_column("auc_roc")
+            .get_column("avg_precision")
             .to_numpy()
         )
         _transfer = (
-            results_df
-            .filter((pl.col("target") == _target) & (pl.col("model") == "XGBoost RLM-transfer"))
+            results_df.filter(
+                (pl.col("target") == _target)
+                & (pl.col("model") == "XGBoost RLM-transfer")
+            )
             .sort("replicate", "fold")
-            .get_column("auc_roc")
+            .get_column("avg_precision")
             .to_numpy()
         )
 
@@ -377,68 +407,114 @@ def _(mo, np, pl, plt, results_df):
         # Lines connecting paired folds
         for _j in range(len(_scratch)):
             _color = "#2196F3" if _transfer[_j] > _scratch[_j] else "#FF5722"
-            _ax.plot([0, 1], [_scratch[_j], _transfer[_j]], color=_color, alpha=0.3, linewidth=0.8)
+            _ax.plot(
+                [0, 1],
+                [_scratch[_j], _transfer[_j]],
+                color=_color,
+                alpha=0.3,
+                linewidth=0.8,
+            )
 
-        _ax.scatter(np.zeros(len(_scratch)), _scratch, color="#FF5722", s=15, zorder=5, label="Scratch")
-        _ax.scatter(np.ones(len(_transfer)), _transfer, color="#2196F3", s=15, zorder=5, label="Transfer")
+        _ax.scatter(
+            np.zeros(len(_scratch)),
+            _scratch,
+            color="#FF5722",
+            s=15,
+            zorder=5,
+            label="Scratch",
+        )
+        _ax.scatter(
+            np.ones(len(_transfer)),
+            _transfer,
+            color="#2196F3",
+            s=15,
+            zorder=5,
+            label="Transfer",
+        )
 
         # Paired t-test
         _t_stat, _p_value = stats.ttest_rel(_transfer, _scratch)
         _mean_diff = (_transfer - _scratch).mean()
-        _title_color = "#2196F3" if _p_value < 0.05 and _mean_diff > 0 else (
-            "#FF5722" if _p_value < 0.05 and _mean_diff < 0 else "black"
+        _title_color = (
+            "#2196F3"
+            if _p_value < 0.05 and _mean_diff > 0
+            else ("#FF5722" if _p_value < 0.05 and _mean_diff < 0 else "black")
         )
         _title = f"{_target}" + "\n" + f"p={_p_value:.4f}, mean diff={_mean_diff:+.4f}"
         _ax.set_title(_title, color=_title_color, fontsize=11)
         _ax.set_xticks([0, 1])
         _ax.set_xticklabels(["Scratch", "RLM Transfer"])
-        _ax.set_ylabel("AUC-ROC")
+        _ax.set_ylabel("AUC-PR")
         _ax.legend(fontsize=9)
 
-    _fig_paired.suptitle("Paired Comparison: XGBoost Scratch vs RLM Transfer", fontsize=14)
+    _fig_paired.suptitle(
+        "Paired Comparison: XGBoost Scratch vs RLM Transfer", fontsize=14
+    )
     plt.tight_layout()
 
-    mo.vstack([
-        mo.md("### Paired Fold Comparison (AUC-ROC)"),
-        mo.as_html(_fig_paired),
-        mo.md("""
+    from pathlib import Path
+
+    _fig_paired.savefig(
+        Path("docs/figures") / "xgb-paired-comparison.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor="white",
+    )
+
+    mo.vstack(
+        [
+            mo.md("### Paired Fold Comparison (AUC-PR)"),
+            mo.as_html(_fig_paired),
+            mo.md("""
     Lines connect the same CV fold across the two models. Blue lines = transfer wins,
     red lines = scratch wins. Title color indicates paired t-test significance
     (blue = transfer significantly better, red = scratch significantly better,
     black = no significant difference at p < 0.05).
         """),
-    ])
+        ]
+    )
     return
 
 
 @app.cell(hide_code=True)
 def _(mo, pl, plt, results_df):
+    from pathlib import Path
     from statsmodels.stats.multicomp import pairwise_tukeyhsd
+
+    FIGURES_DIR = Path("docs/figures")
 
     _fig_tukey, _axes_tukey = plt.subplots(1, 2, figsize=(14, 5))
 
     for _i, _target in enumerate(["HLM Stability", "PAMPA pH 7.4"]):
         _subset = results_df.filter(pl.col("target") == _target)
-        _values = _subset.get_column("auc_roc").to_numpy()
+        _values = _subset.get_column("avg_precision").to_numpy()
         _groups = _subset.get_column("model").to_list()
 
         _tukey = pairwise_tukeyhsd(_values, _groups, alpha=0.05)
         _tukey.plot_simultaneous(ax=_axes_tukey[_i])
         _axes_tukey[_i].set_title(_target)
-        _axes_tukey[_i].set_xlabel("AUC-ROC")
+        _axes_tukey[_i].set_xlabel("AUC-PR")
 
     _fig_tukey.suptitle("Tukey HSD Simultaneous Confidence Intervals", fontsize=14)
     plt.tight_layout()
+    _fig_tukey.savefig(
+        FIGURES_DIR / "xgb-tukey-hsd.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor="white",
+    )
 
-    mo.vstack([
-        mo.md("### Tukey HSD Comparison"),
-        mo.as_html(_fig_tukey),
-        mo.md("""
+    mo.vstack(
+        [
+            mo.md("### Tukey HSD Comparison"),
+            mo.as_html(_fig_tukey),
+            mo.md("""
     Overlapping intervals indicate no statistically significant difference
     between models. Non-overlapping intervals indicate a significant
     difference (FWER-controlled at alpha = 0.05).
         """),
-    ])
+        ]
+    )
     return
 
 
@@ -449,11 +525,15 @@ def _(DATA_DIR, logger, mo, results_df):
     logger.info(f"Saved XGBoost results to {DATA_DIR / 'xgb_results.parquet'}")
 
     # Quick peek at results
-    mo.vstack([
-        mo.md("### Saved Results"),
-        mo.md(f"Results saved to `{DATA_DIR / 'xgb_results.parquet'}` ({results_df.height} rows)"),
-        mo.ui.table(results_df.head(10)),
-    ])
+    mo.vstack(
+        [
+            mo.md("### Saved Results"),
+            mo.md(
+                f"Results saved to `{DATA_DIR / 'xgb_results.parquet'}` ({results_df.height} rows)"
+            ),
+            mo.ui.table(results_df.head(10)),
+        ]
+    )
     return
 
 

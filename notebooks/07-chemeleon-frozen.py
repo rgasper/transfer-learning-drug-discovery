@@ -88,34 +88,44 @@ def _(chemeleon_compare_df, mo, pl):
 
 @app.cell
 def _(chemeleon_compare_df, mo, pairwise_tukeyhsd, pl, plt):
+    from pathlib import Path
+
+    FIGURES_DIR = Path("docs/figures")
+
     _fig_tukey, _axes_tukey = plt.subplots(1, 2, figsize=(16, 7))
 
     for _i, _target in enumerate(["HLM Stability", "PAMPA pH 7.4"]):
         _subset = chemeleon_compare_df.filter(pl.col("target") == _target)
-        _values = _subset.get_column("auc_roc").to_numpy()
+        _values = _subset.get_column("avg_precision").to_numpy()
         _groups = _subset.get_column("model").to_list()
         _tukey = pairwise_tukeyhsd(_values, _groups, alpha=0.05)
 
         _means = (
             _subset.group_by("model")
-            .agg(pl.col("auc_roc").mean())
-            .sort("auc_roc", descending=True)
+            .agg(pl.col("avg_precision").mean())
+            .sort("avg_precision", descending=True)
         )
         _best_model = _means.get_column("model")[0]
 
         _tukey.plot_simultaneous(
-            comparison_name=_best_model, ax=_axes_tukey[_i], xlabel="AUC-ROC"
+            comparison_name=_best_model, ax=_axes_tukey[_i], xlabel="AUC-PR"
         )
         _axes_tukey[_i].set_title(f"{_target}\n(reference: {_best_model})", fontsize=12)
 
     _fig_tukey.suptitle(
-        "CheMeleon Frozen vs Unfrozen: Tukey HSD (FWER = 0.05)", fontsize=14
+        "CheMeleon Frozen vs Unfrozen: Tukey HSD (FWER = 0.05, AUC-PR)", fontsize=14
     )
     plt.tight_layout()
+    _fig_tukey.savefig(
+        FIGURES_DIR / "chemeleon-frozen-tukey-hsd.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor="white",
+    )
 
     mo.vstack(
         [
-            mo.md("## Tukey HSD: Frozen vs Unfrozen"),
+            mo.md("## Tukey HSD: Frozen vs Unfrozen (AUC-PR)"),
             mo.as_html(_fig_tukey),
         ]
     )
@@ -124,6 +134,10 @@ def _(chemeleon_compare_df, mo, pairwise_tukeyhsd, pl, plt):
 
 @app.cell
 def _(chemeleon_compare_df, mo, pl, plt, sns):
+    from pathlib import Path
+
+    FIGURES_DIR = Path("docs/figures")
+
     _model_order = [
         "CheMeleon single-finetune",
         "CheMeleon double-finetune",
@@ -137,13 +151,13 @@ def _(chemeleon_compare_df, mo, pl, plt, sns):
         "CheMeleon frozen double": "#B39DDB",
     }
 
-    _fig_box, _axes_box = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+    _fig_box, _axes_box = plt.subplots(1, 2, figsize=(14, 6), sharey=False)
     for _i, _target in enumerate(["HLM Stability", "PAMPA pH 7.4"]):
         _subset = chemeleon_compare_df.filter(pl.col("target") == _target).to_pandas()
         sns.boxplot(
             data=_subset,
             x="model",
-            y="auc_roc",
+            y="avg_precision",
             hue="model",
             ax=_axes_box[_i],
             order=_model_order,
@@ -152,15 +166,23 @@ def _(chemeleon_compare_df, mo, pl, plt, sns):
         )
         _axes_box[_i].set_title(_target)
         _axes_box[_i].set_xlabel("")
-        _axes_box[_i].set_ylabel("AUC-ROC" if _i == 0 else "")
+        _axes_box[_i].set_ylabel("AUC-PR" if _i == 0 else "")
         _axes_box[_i].tick_params(axis="x", rotation=45)
 
-    _fig_box.suptitle("CheMeleon: Frozen vs Unfrozen Encoder (25 folds)", fontsize=14)
+    _fig_box.suptitle(
+        "CheMeleon: Frozen vs Unfrozen Encoder (25 folds, AUC-PR)", fontsize=14
+    )
     plt.tight_layout()
+    _fig_box.savefig(
+        FIGURES_DIR / "chemeleon-frozen-boxplots.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor="white",
+    )
 
     mo.vstack(
         [
-            mo.md("## AUC-ROC Distributions"),
+            mo.md("## AUC-PR Distributions"),
             mo.as_html(_fig_box),
         ]
     )

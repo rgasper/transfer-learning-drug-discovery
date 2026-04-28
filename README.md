@@ -52,6 +52,21 @@ The two transfer targets test a clear hypothesis:
   other measures passive membrane permeability. Orthogonal mechanisms. We
   expect transfer to be useless or harmful.
 
+### Validating a comparable starting point
+
+For the transfer comparison to be fair, all architectures must learn
+the RLM source task comparably. If one architecture learns RLM better
+than another, downstream differences could reflect a head start rather
+than a transfer mechanism advantage. We evaluated all three base
+architectures on RLM using the same 5x5 CV protocol:
+
+![RLM base model comparison](docs/figures/rlm-base-comparison.png)
+
+All architectures achieve statistically indistinguishable performance
+on RLM (Tukey HSD, FWER = 0.05), confirming that any differences after
+transfer to HLM or PAMPA are attributable to how each architecture
+handles the transfer, not to a stronger source-task model.
+
 ---
 
 ## Story 1: When Transfer Helps (RLM -> HLM)
@@ -109,6 +124,25 @@ underlying enzymatic chemistry is conserved.
 
 ![Correlation scatter](docs/figures/eda-correlation-scatter.png)
 
+To make this concrete, we computed feature importance for both
+architectures on HLM: SHAP values for XGBoost's Morgan fingerprint bits
+and per-atom gradient saliency for Chemprop's D-MPNN.
+
+![HLM feature importance](docs/figures/hlm-feature-importance.png)
+
+Both architectures converge on the same structural story. XGBoost's top
+SHAP features (left) highlight Morgan fingerprint bits corresponding to
+aromatic ring environments and heteroatom-containing functional groups --
+the substructural features known to govern CYP-mediated oxidative
+metabolism. Chemprop's atom-type saliency (right) mirrors this: aromatic
+carbons and nitrogen-containing environments dominate the model's
+attention. This convergence across fundamentally different model types
+(tree ensemble on fixed fingerprints vs. message-passing neural network
+on molecular graphs) is evidence that both learn genuine
+structure-activity rules governing metabolic stability, not
+dataset-specific artifacts -- and these are exactly the rules that
+transfer from RLM to HLM.
+
 ### Key pairwise statistics (Tukey HSD, FWER = 0.05)
 
 - Chemprop RLM-transfer vs CheMeleon frozen single: not significant
@@ -119,6 +153,12 @@ underlying enzymatic chemistry is conserved.
   Largest gap.
 
 ![All models boxplots](docs/figures/all-models-boxplots.png)
+
+![Tukey HSD HLM](docs/figures/tukey-hsd-hlm-auc-pr.png)
+
+Tukey HSD simultaneous confidence intervals for HLM (AUC-PR, FWER = 0.05).
+The reference model (highest mean) is highlighted. Groups colored red are
+significantly different from the reference; gray groups are not.
 
 ---
 
@@ -179,6 +219,12 @@ The transfer effect by architecture tells the story:
 | XGBoost | **-0.057** (catastrophic) |
 | Chemprop | +0.008 (slight improvement) |
 | CheMeleon (single -> double) | +0.004 (negligible) |
+
+![Tukey HSD PAMPA](docs/figures/tukey-hsd-pampa-auc-pr.png)
+
+Tukey HSD simultaneous confidence intervals for PAMPA (AUC-PR, FWER = 0.05).
+XGBoost RLM-transfer is the sole red outlier -- significantly worse than
+the reference. All other models are statistically indistinguishable.
 
 ### Why: decision boundaries vs. representations
 
@@ -620,12 +666,12 @@ are similar but not identical to AUC-PR.
 
 ![All models Tukey HSD](docs/figures/all-models-tukey-hsd.png)
 
-Tukey HSD simultaneous confidence intervals (FWER = 0.05). The reference
-model (highest mean) is highlighted. Groups colored red are significantly
-different from the reference. Groups colored gray are not significantly
-different. Non-overlapping intervals between any two groups indicate a
-significant difference. Note: all intervals within each panel have
-identical widths -- this is expected with balanced group sizes (n=25);
+Tukey HSD simultaneous confidence intervals (AUC-PR, FWER = 0.05). The
+reference model (highest mean) is highlighted. Groups colored red are
+significantly different from the reference. Groups colored gray are not
+significantly different. Non-overlapping intervals between any two groups
+indicate a significant difference. Note: all intervals within each panel
+have identical widths -- this is expected with balanced group sizes (n=25);
 see [docs/tukey-hsd-interval-widths.md](docs/tukey-hsd-interval-widths.md)
 for details.
 
@@ -652,11 +698,15 @@ xfer-learning/
     07-chemeleon-frozen.py             # Marimo: frozen encoder comparison
     08-failure-analysis.py             # Marimo: XGBoost SHAP failure cases
     09-chemprop-saliency.py            # Marimo: Chemprop gradient saliency
+    10-hlm-importance.py               # Marimo: HLM feature importance (XGBoost + Chemprop)
+    11-rlm-base-comparison.py          # Marimo: RLM base model equivalence validation
   scripts/
     run-chemprop-training.py           # Chemprop CV training with disk caching
     run-chemeleon-training.py          # CheMeleon CV training with disk caching
     run-chemeleon-frozen-training.py   # CheMeleon frozen encoder training
     run-xgb-ablation.py               # XGBoost transfer ablation experiment
+    run-rlm-base-eval-xgb.py          # RLM base eval: XGBoost (run first)
+    run-rlm-base-eval-nn.py           # RLM base eval: Chemprop + CheMeleon (merges results)
   src/xfer_learning/                   # Package (placeholder)
   data/                                # Downloaded/processed data (gitignored)
   docs/
@@ -683,6 +733,8 @@ uv run python scripts/run-chemprop-training.py
 uv run python scripts/run-chemeleon-training.py
 uv run python scripts/run-chemeleon-frozen-training.py
 uv run python scripts/run-xgb-ablation.py
+uv run python scripts/run-rlm-base-eval-xgb.py
+uv run python scripts/run-rlm-base-eval-nn.py
 
 # View results
 uv run marimo edit notebooks/04-train-chemprop.py
@@ -691,6 +743,8 @@ uv run marimo edit notebooks/06-analysis.py
 uv run marimo edit notebooks/07-chemeleon-frozen.py
 uv run marimo edit notebooks/08-failure-analysis.py
 uv run marimo edit notebooks/09-chemprop-saliency.py
+uv run marimo edit notebooks/10-hlm-importance.py
+uv run marimo edit notebooks/11-rlm-base-comparison.py
 ```
 
 ## References
