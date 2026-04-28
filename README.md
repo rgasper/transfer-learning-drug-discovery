@@ -193,6 +193,8 @@ TODO in combined summary table here, add column marking models which are statist
 
 todo remove first auc-roc bar plot there's no purpose to it.
 
+Todo the error on all the models int eh tukey hsd points look identicaly. the first auc-roc plot you can see they're definitely not. is that just cus the visual is hard to differentiate, or is that a real bug?
+
 ![All models boxplots](docs/figures/all-models-boxplots.png)
 
 ![All models Tukey HSD](docs/figures/all-models-tukey-hsd.png)
@@ -344,17 +346,21 @@ and transfer. This is consistent with the architecture difference:
 Chemprop's transfer replaces the FFN head entirely, so the encoder's
 attention pattern is less directly distorted by the old task.
 
+![Chemprop substructure agree/disagree](docs/figures/chemprop-substructure-agree-disagree.png)
+
 The per-molecule saliency difference maps (transfer minus scratch,
 red/green diverging gradient) confirm this: for the same failure
 molecules where XGBoost transfer was catastrophically wrong, Chemprop
 transfer shows only modest shifts in atom-level attention, and both
 Chemprop models correctly predict the molecules as permeable.
 
+![XGBoost vs Chemprop failure comparison](docs/figures/xgb-vs-chemprop-failure-comparison.png)
+
 **XGBoost failure molecule #1** (true: permeable):
 - XGBoost scratch: P(active) = 0.918 (correct)
 - XGBoost RLM-transfer: P(active) = 0.248 (catastrophically wrong)
-- Chemprop scratch: correctly predicts permeable
-- Chemprop RLM-transfer: also correctly predicts permeable
+- Chemprop scratch: P(active) = 0.955 (correct)
+- Chemprop RLM-transfer: P(active) = 0.958 (correct)
 
 The XGBoost transfer model's SHAP analysis shows it relied on
 RLM-inherited fingerprint bits that pushed toward "inactive" --
@@ -387,7 +393,7 @@ metabolic stability and membrane permeability.
 
 CheMeleon single-finetune (0.676) is worse than Chemprop scratch (0.701)
 on PAMPA, and this gap is not statistically significant only because of
-high variance. The most likely explanation is overfitting.
+high variance. The most likely explanation is overfitting. TODO remove the "mos tlikely explanation". the difference is not statistically significant as you just said.
 
 With 9.3M parameters and ~1,626 PAMPA training samples, CheMeleon is
 extremely overparameterized. The foundation pre-training provides a
