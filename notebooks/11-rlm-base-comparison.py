@@ -119,7 +119,7 @@ def _(FIGURES_DIR, logger, mo, pairwise_tukeyhsd, pl, plt, rlm_base_df, sns):
     _ax_tukey.set_title(f"Tukey HSD (FWER = 0.05)\n(reference: {_best_model})")
 
     _fig.suptitle(
-        "RLM Source Task: All Architectures Learn Comparably",
+        "RLM Source Task: XGBoost Underperforms D-MPNN Architectures",
         fontsize=13,
         fontweight="bold",
     )
@@ -137,10 +137,16 @@ def _(FIGURES_DIR, logger, mo, pairwise_tukeyhsd, pl, plt, rlm_base_df, sns):
     **Left:** AUC-PR distributions for each architecture on RLM (5x5 CV,
     25 folds). **Right:** Tukey HSD simultaneous confidence intervals.
 
-    If all models are in the same statistical group (no red), the RLM
-    source task is learned comparably across architectures, and downstream
-    differences reflect the transfer mechanism rather than a stronger
-    starting point.
+    XGBoost on Morgan fingerprints is significantly worse than both D-MPNN
+    architectures on the RLM source task and shows substantially higher
+    variance across folds. Chemprop and CheMeleon are statistically
+    indistinguishable. This asymmetry strengthens the transfer learning
+    conclusions: XGBoost transfer helps on HLM despite a weaker and
+    noisier source model, and XGBoost transfer catastrophically fails on
+    PAMPA despite learning RLM *less* well -- ruling out "too-strong
+    source model" as an explanation for the negative transfer. The higher
+    fold-to-fold instability also suggests that fixed fingerprints capture
+    less generalizable structure than learned D-MPNN representations.
         """),
         ]
     )
