@@ -33,7 +33,16 @@ def _():
     DATA_DIR = Path("data")
     FIGURES_DIR = Path("docs/figures")
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    return DATA_DIR, FIGURES_DIR, logger, np, pairwise_tukeyhsd, pl, plt, sns, stats
+    return (
+        DATA_DIR,
+        FIGURES_DIR,
+        logger,
+        pairwise_tukeyhsd,
+        pl,
+        plt,
+        sns,
+        stats,
+    )
 
 
 @app.cell
@@ -48,7 +57,6 @@ def _(DATA_DIR, logger, pl):
         f"({xgb_df.height} XGB + {chemprop_df.height} Chemprop + "
         f"{chemeleon_df.height} CheMeleon + {frozen_df.height} frozen)"
     )
-
     return (all_df,)
 
 
@@ -169,12 +177,11 @@ def _(FIGURES_DIR, all_df, logger, mo, pl, plt, sns):
             mo.as_html(_fig_box),
         ]
     )
-
     return
 
 
 @app.cell
-def _(all_df, mo, np, pl, stats):
+def _(all_df, mo, pl, stats):
     # Transfer learning delta: for each fold, compute (transfer - scratch)
     _deltas = []
     _pairs = [

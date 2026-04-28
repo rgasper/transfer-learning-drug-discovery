@@ -49,7 +49,6 @@ def _():
     FIGURES_DIR = Path("docs/figures")
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     return (
-        CHECKPOINTS_DIR,
         Chem,
         DATA_DIR,
         FIGURES_DIR,
@@ -64,7 +63,6 @@ def _():
         models,
         nn,
         np,
-        pl,
         plt,
         rdFingerprintGenerator,
         rdMolDraw2D,
@@ -101,20 +99,11 @@ def _(DATA_DIR, json, logger, np):
     rlm_X = global_fps[rlm_fp_indices]
 
     logger.info(f"HLM: {hlm_X.shape[0]} molecules, RLM: {rlm_X.shape[0]} molecules")
-    return (
-        global_fps,
-        hlm_X,
-        hlm_folds,
-        hlm_labels,
-        hlm_smiles,
-        rlm_X,
-        rlm_labels,
-        rlm_smiles,
-    )
+    return hlm_X, hlm_folds, hlm_labels, hlm_smiles
 
 
 @app.cell
-def _(hlm_X, hlm_folds, hlm_labels, logger, np, roc_auc_score, shap, xgb):
+def _(hlm_X, hlm_folds, hlm_labels, logger, roc_auc_score, shap, xgb):
     """Train XGBoost on HLM (rep 0, fold 0) and compute SHAP values."""
     REP = 0
     FOLD = 0
@@ -164,7 +153,6 @@ def _(hlm_X, hlm_folds, hlm_labels, logger, np, roc_auc_score, shap, xgb):
     xgb_explainer = shap.TreeExplainer(xgb_model)
     xgb_shap_values = xgb_explainer.shap_values(xgb_X_test)
     logger.info(f"SHAP values shape: {xgb_shap_values.shape}")
-
     return xgb_shap_values, xgb_test_mask
 
 
@@ -233,7 +221,6 @@ def _(
 
 @app.cell
 def _(
-    CHECKPOINTS_DIR,
     chemprop_data,
     featurizers,
     hlm_folds,
@@ -415,6 +402,9 @@ def _(
     Chem,
     FIGURES_DIR,
     Image,
+    chemprop_atom_means,
+    chemprop_atom_stderrs,
+    chemprop_top_atom_types,
     io,
     logger,
     mo,
@@ -426,9 +416,6 @@ def _(
     xgb_mean_abs_shap,
     xgb_mean_signed_shap,
     xgb_top20_bits,
-    chemprop_atom_means,
-    chemprop_atom_stderrs,
-    chemprop_top_atom_types,
 ):
     """Generate the combined HLM feature importance figure."""
 

@@ -41,7 +41,6 @@ def _():
 
     TARGET_ENDPOINTS = ["hlm", "pampa"]
     PRETRAIN_ENDPOINT = "rlm"
-
     return (
         DATA_DIR,
         ENDPOINT_NAMES,
@@ -102,7 +101,6 @@ def _(DATA_DIR, ENDPOINT_NAMES, json, logger, np):
             f"{_key}: X={_X.shape}, y={_labels.shape}, "
             f"folds={_folds.shape}, active={(_labels == 1).sum()}, inactive={(_labels == 0).sum()}"
         )
-
     return N_FOLDS, N_REPLICATES, fp_data
 
 
@@ -297,7 +295,6 @@ def _(
 
     results_df = pl.DataFrame(all_results)
     logger.info(f"Total results: {results_df.height} rows")
-
     return (results_df,)
 
 
