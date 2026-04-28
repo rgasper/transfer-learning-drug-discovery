@@ -103,6 +103,18 @@ def _(FIGURES_DIR, logger, mo, pairwise_tukeyhsd, pl, plt, rlm_base_df, sns):
     _ax_box.set_ylabel("AUC-PR")
     _ax_box.tick_params(axis="x", rotation=20)
 
+    # Random baseline = positive class prevalence (754 / 2529)
+    _rlm_baseline = 0.298
+    _ax_box.axhline(
+        _rlm_baseline,
+        color="black",
+        linestyle="--",
+        linewidth=1.2,
+        alpha=0.6,
+        label=f"Random baseline ({_rlm_baseline:.3f})",
+    )
+    _ax_box.legend(fontsize=9, loc="lower right")
+
     # Tukey HSD
     _values = rlm_base_df.get_column("avg_precision").to_numpy()
     _groups = rlm_base_df.get_column("model").to_list()
