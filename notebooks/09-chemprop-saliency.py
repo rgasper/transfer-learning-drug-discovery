@@ -359,11 +359,11 @@ def _(Chem, Image, failure_info, io, mo, np, plt, rdMolDraw2D, saliency_data):
         [
             mo.md("## Chemprop Saliency Difference: Transfer - Scratch"),
             mo.md("""
-Per-atom saliency difference (transfer minus scratch, after normalizing
-each model's saliency to [0,1]). **Green** = transfer model pays more
-attention to this atom than scratch. **Red** = scratch pays more attention.
-Intensity scales with the squared magnitude of the difference, so only
-the largest disagreements stand out.
+    Per-atom saliency difference (transfer minus scratch, after normalizing
+    each model's saliency to [0,1]). **Green** = transfer model pays more
+    attention to this atom than scratch. **Red** = scratch pays more attention.
+    Intensity scales with the squared magnitude of the difference, so only
+    the largest disagreements stand out.
         """),
             *_outputs,
         ]
@@ -374,10 +374,8 @@ the largest disagreements stand out.
 @app.cell
 def _(
     Chem,
-    Image,
     chemprop_data,
     featurizer,
-    io,
     logger,
     mo,
     model_scratch,
@@ -386,9 +384,7 @@ def _(
     pampa_labels,
     pampa_smiles,
     plt,
-    rdMolDraw2D,
     test_mask,
-    torch,
 ):
     # Aggregated atom-type saliency across all test molecules
     _test_smi = [pampa_smiles[i] for i in range(len(pampa_smiles)) if test_mask[i]]
@@ -503,16 +499,46 @@ def _(
     _ax.invert_yaxis()
     plt.tight_layout()
 
-    # Find biggest disagreements
-    _delta = [
-        (
-            k,
-            np.mean(_atom_type_saliency_transfer[k])
-            - np.mean(_atom_type_saliency_scratch[k]),
-        )
-        for k in _atom_types
-    ]
-    _delta.sort(key=lambda x: abs(x[1]), reverse=True)
+    # Categorize atom types: agree vs disagree in direction of importance
+    # "agree" = both models assign similar relative importance
+    # "disagree" = one model assigns much more importance than the other
+    _all_atom_types = list(_atom_type_saliency_scratch.keys())
+    agree_atom_types = []
+    disagree_atom_types = []
+
+    for _k in _all_atom_types:
+        _ms = np.mean(_atom_type_saliency_scratch[_k])
+        _mt = np.mean(_atom_type_saliency_transfer[_k])
+        _diff = _mt - _ms
+        if abs(_diff) < 0.02:
+            agree_atom_types.append((_k, _ms, _mt, _diff))
+        elif abs(_diff) >= 0.04:
+            disagree_atom_types.append((_k, _ms, _mt, _diff))
+
+    agree_atom_types.sort(key=lambda x: (x[1] + x[2]) / 2, reverse=True)
+    disagree_atom_types.sort(key=lambda x: abs(x[3]), reverse=True)
+
+    # Store the per-molecule saliency data for the substructure cell
+    sampled_saliency = []
+    for _i in _sample_idx:
+        _smi = _test_smi[_i]
+        _mol = Chem.MolFromSmiles(_smi)
+        if _mol is None:
+            continue
+        try:
+            _sal_s = _get_saliency(model_scratch, _smi)
+            _sal_t = _get_saliency(model_transfer, _smi)
+        except Exception:
+            continue
+        _n_atoms = _mol.GetNumAtoms()
+        if len(_sal_s) != _n_atoms or len(_sal_t) != _n_atoms:
+            continue
+        sampled_saliency.append({"smiles": _smi, "sal_s": _sal_s, "sal_t": _sal_t})
+
+    logger.info(f"Agree: {len(agree_atom_types)}, Disagree: {len(disagree_atom_types)}")
+
+    # Top disagreements for display
+    _delta = [(k, d) for k, _ms, _mt, d in disagree_atom_types[:5]]
 
     mo.vstack(
         [
@@ -529,6 +555,147 @@ Error bars show standard error of the mean.
 Atom types where the transfer model assigns substantially more or less
 importance than the scratch model indicate where the RLM pre-training
 shifted the model's attention.
+        """),
+        ]
+    )
+    return agree_atom_types, disagree_atom_types, sampled_saliency
+
+
+@app.cell
+def _(
+    Chem,
+    Image,
+    agree_atom_types,
+    disagree_atom_types,
+    io,
+    mo,
+    np,
+    plt,
+    rdMolDraw2D,
+    sampled_saliency,
+):
+    # Find example molecules for top agree and disagree atom types, and
+    # highlight those atoms green (agree) or red (disagree)
+
+    def _atom_type_key(atom):
+        _sym = atom.GetSymbol()
+        _arom = "(arom)" if atom.GetIsAromatic() else ""
+        _deg = atom.GetDegree()
+        return f"{_sym}{_arom} deg{_deg}"
+
+    def _draw_highlighted_atoms(mol, atom_indices, color, size=(300, 250)):
+        _acols = {a: color for a in atom_indices}
+        _bonds = []
+        _bcols = {}
+        for _b in range(mol.GetNumBonds()):
+            _bond = mol.GetBondWithIdx(_b)
+            if (
+                _bond.GetBeginAtomIdx() in atom_indices
+                and _bond.GetEndAtomIdx() in atom_indices
+            ):
+                _bonds.append(_b)
+                _bcols[_b] = color
+        _d = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
+        _d.DrawMolecule(
+            mol,
+            highlightAtoms=atom_indices,
+            highlightAtomColors=_acols,
+            highlightBonds=_bonds,
+            highlightBondColors=_bcols,
+        )
+        _d.FinishDrawing()
+        return Image.open(io.BytesIO(_d.GetDrawingText()))
+
+    def _find_example_mol(target_atom_type, saliency_list):
+        """Find a molecule that contains the target atom type and has high saliency there."""
+        _best = None
+        _best_score = -1
+        for _entry in saliency_list:
+            _mol = Chem.MolFromSmiles(_entry["smiles"])
+            if _mol is None:
+                continue
+            _sal_s = np.array(_entry["sal_s"])
+            _sal_t = np.array(_entry["sal_t"])
+            _max_s = _sal_s.max() if _sal_s.max() > 0 else 1.0
+            _max_t = _sal_t.max() if _sal_t.max() > 0 else 1.0
+            _matching_atoms = []
+            for _a in range(_mol.GetNumAtoms()):
+                if _atom_type_key(_mol.GetAtomWithIdx(_a)) == target_atom_type:
+                    _matching_atoms.append(_a)
+            if not _matching_atoms:
+                continue
+            # Score by how salient these atoms are (average across models)
+            _score = sum(
+                (_sal_s[a] / _max_s + _sal_t[a] / _max_t) / 2 for a in _matching_atoms
+            ) / len(_matching_atoms)
+            if _score > _best_score:
+                _best_score = _score
+                _best = (_mol, _matching_atoms, _entry["smiles"])
+        return _best
+
+    _n_agree = min(6, len(agree_atom_types))
+    _n_disagree = min(6, len(disagree_atom_types))
+    _n_cols = max(_n_agree, _n_disagree, 1)
+
+    _fig, _axes = plt.subplots(2, _n_cols, figsize=(_n_cols * 4, 9))
+    if _n_cols == 1:
+        _axes = _axes.reshape(2, 1)
+
+    # Row 0: agree (green)
+    for _j in range(_n_agree):
+        _atype, _ms, _mt, _diff = agree_atom_types[_j]
+        _result = _find_example_mol(_atype, sampled_saliency)
+        if _result:
+            _mol, _atoms, _smi = _result
+            _img = _draw_highlighted_atoms(_mol, _atoms, (0.2, 0.8, 0.3, 0.5))
+            _axes[0][_j].imshow(_img)
+        _axes[0][_j].set_title(
+            f"AGREE: {_atype}\nS={_ms:.3f} T={_mt:.3f}", fontsize=9, color="#4CAF50"
+        )
+        _axes[0][_j].axis("off")
+
+    # Row 1: disagree (red)
+    for _j in range(_n_disagree):
+        _atype, _ms, _mt, _diff = disagree_atom_types[_j]
+        _result = _find_example_mol(_atype, sampled_saliency)
+        if _result:
+            _mol, _atoms, _smi = _result
+            _img = _draw_highlighted_atoms(_mol, _atoms, (1.0, 0.3, 0.2, 0.5))
+            _axes[1][_j].imshow(_img)
+        _dir_s = "more" if _diff < 0 else "less"
+        _axes[1][_j].set_title(
+            f"DISAGREE: {_atype}\nS={_ms:.3f} T={_mt:.3f} (d={_diff:+.3f})",
+            fontsize=9,
+            color="#FF5722",
+        )
+        _axes[1][_j].axis("off")
+
+    for _row in range(2):
+        _n = _n_agree if _row == 0 else _n_disagree
+        for _j in range(_n, _n_cols):
+            _axes[_row][_j].axis("off")
+
+    _fig.suptitle(
+        "Chemprop: Atom Types Models Agree (top, green) vs Disagree (bottom, red)",
+        fontsize=13,
+    )
+    plt.tight_layout()
+
+    mo.vstack(
+        [
+            mo.md("## Substructure Agreement and Disagreement"),
+            mo.as_html(_fig),
+            mo.md(f"""
+**Agree** ({len(agree_atom_types)} atom types, green): Both models
+assign similar relative importance to these atom types (difference < 0.02).
+Highlighted atoms show the atom type in context on an example molecule.
+
+**Disagree** ({len(disagree_atom_types)} atom types, red): The transfer
+model assigns substantially different importance than scratch
+(difference >= 0.04). These are atom environments where RLM pre-training
+shifted the D-MPNN's learned representation.
+
+S = scratch mean normalized saliency, T = transfer mean normalized saliency.
         """),
         ]
     )
