@@ -21,7 +21,9 @@ def _():
 
 @app.cell
 def _():
+    import io
     import json
+    from collections import defaultdict
     from pathlib import Path
 
     import matplotlib.pyplot as plt
@@ -31,20 +33,26 @@ def _():
     import shap
     import xgboost as xgb
     from loguru import logger
+    from PIL import Image
     from rdkit import Chem
     from rdkit.Chem import rdFingerprintGenerator
+    from rdkit.Chem.Draw import rdMolDraw2D
     from sklearn.metrics import roc_auc_score
 
     DATA_DIR = Path("data")
     return (
         Chem,
         DATA_DIR,
+        Image,
+        defaultdict,
+        io,
         json,
         logger,
         np,
         pl,
         plt,
         rdFingerprintGenerator,
+        rdMolDraw2D,
         roc_auc_score,
         shap,
         xgb,
@@ -232,19 +240,18 @@ def _(X_test, logger, model_scratch, model_transfer, shap):
 @app.cell
 def _(
     Chem,
+    Image,
     failure_indices,
     failure_molecules,
+    io,
     mo,
     np,
     plt,
     rdFingerprintGenerator,
+    rdMolDraw2D,
     shap_scratch,
     shap_transfer,
 ):
-    import io
-
-    from PIL import Image
-    from rdkit.Chem.Draw import rdMolDraw2D
 
     def get_shap_highlighted_image(
         mol,
@@ -364,11 +371,11 @@ def _(
         [
             mo.md("## SHAP Analysis: Per-Molecule Feature Attribution"),
             mo.md("""
-For each failure molecule: highlighted structures show the top 5 SHAP
-features mapped onto the molecular structure. **Blue** regions push the
-prediction toward active (permeable), **red** regions push toward inactive.
-Opacity scales with SHAP magnitude. The left structure shows what the
-scratch model focuses on; the right shows the transfer model's focus.
+    For each failure molecule: highlighted structures show the top 5 SHAP
+    features mapped onto the molecular structure. **Blue** regions push the
+    prediction toward active (permeable), **red** regions push toward inactive.
+    Opacity scales with SHAP magnitude. The left structure shows what the
+    scratch model focuses on; the right shows the transfer model's focus.
             """),
             *_outputs,
         ]
@@ -377,50 +384,176 @@ scratch model focuses on; the right shows the transfer model's focus.
 
 
 @app.cell
-def _(mo, np, plt, shap_scratch, shap_transfer):
-    # Global SHAP comparison: which bits matter most for each model?
-    _mean_abs_scratch = np.abs(shap_scratch).mean(axis=0)
-    _mean_abs_transfer = np.abs(shap_transfer).mean(axis=0)
+def _(
+    Chem,
+    Image,
+    defaultdict,
+    io,
+    mo,
+    np,
+    pampa_smiles,
+    plt,
+    rdFingerprintGenerator,
+    rdMolDraw2D,
+    shap_scratch,
+    shap_transfer,
+    test_mask,
+):
+    _gen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
+    _test_smiles = [pampa_smiles[i] for i in range(len(pampa_smiles)) if test_mask[i]]
 
-    # Top 20 bits by importance in each model
-    _top20_scratch = np.argsort(_mean_abs_scratch)[-20:][::-1]
-    _top20_transfer = np.argsort(_mean_abs_transfer)[-20:][::-1]
+    # Map bits to SMARTS and collect example molecules
+    _bit_to_smarts = defaultdict(set)
+    _bit_to_example = {}  # bit -> (mol, center_atom, radius)
 
-    _fig_global, (_ax1, _ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    for _smi in _test_smiles:
+        _mol = Chem.MolFromSmiles(_smi)
+        if _mol is None:
+            continue
+        _ao = rdFingerprintGenerator.AdditionalOutput()
+        _ao.AllocateBitInfoMap()
+        _fp = _gen.GetFingerprint(_mol, additionalOutput=_ao)
+        _bit_info = _ao.GetBitInfoMap()
 
-    _ax1.barh(
-        range(20), [_mean_abs_scratch[b] for b in _top20_scratch], color="#2196F3"
+        for _bit, _envs in _bit_info.items():
+            for _center, _rad in _envs:
+                try:
+                    if _rad > 0:
+                        _env = Chem.FindAtomEnvironmentOfRadiusN(_mol, _rad, _center)
+                        if _env:
+                            _amap = {}
+                            _submol = Chem.PathToSubmol(_mol, _env, atomMap=_amap)
+                            _smarts = Chem.MolToSmarts(_submol)
+                            _bit_to_smarts[_bit].add(_smarts)
+                    else:
+                        _atom = _mol.GetAtomWithIdx(_center)
+                        _bit_to_smarts[_bit].add(f"[#{_atom.GetAtomicNum()}]")
+                    if _bit not in _bit_to_example:
+                        _bit_to_example[_bit] = (_mol, _center, _rad)
+                except Exception:
+                    continue
+
+    # Mean SHAP per bit
+    _mean_s = shap_scratch.mean(axis=0)
+    _mean_t = shap_transfer.mean(axis=0)
+
+    # Find important bits (top 50 by |SHAP| in either model)
+    _top50_s = set(np.argsort(np.abs(_mean_s))[-50:])
+    _top50_t = set(np.argsort(np.abs(_mean_t))[-50:])
+    _important = _top50_s | _top50_t
+
+    _agree = []
+    _disagree = []
+    for _bit in _important:
+        _sv_s = float(_mean_s[_bit])
+        _sv_t = float(_mean_t[_bit])
+        if abs(_sv_s) < 0.001 or abs(_sv_t) < 0.001:
+            continue
+        if _sv_s * _sv_t > 0:
+            _agree.append((_bit, _sv_s, _sv_t))
+        else:
+            _disagree.append((_bit, _sv_s, _sv_t))
+
+    _agree.sort(key=lambda x: abs(x[1]) + abs(x[2]), reverse=True)
+    _disagree.sort(key=lambda x: abs(x[1]) + abs(x[2]), reverse=True)
+
+    def _draw_bit_on_example(bit, mol, center_atom, radius, size=(250, 200)):
+        """Draw an example molecule with a specific bit's environment highlighted."""
+        _atoms = []
+        _bonds = []
+        if radius > 0:
+            _env = Chem.FindAtomEnvironmentOfRadiusN(mol, radius, center_atom)
+            if _env:
+                _amap = {}
+                Chem.PathToSubmol(mol, _env, atomMap=_amap)
+                _atoms = list(_amap.keys())
+                _bonds = list(_env)
+        else:
+            _atoms = [center_atom]
+
+        _color = (0.2, 0.6, 1.0, 0.5)
+        _acols = {a: _color for a in _atoms}
+        _bcols = {b: _color for b in _bonds}
+
+        _d = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
+        _d.DrawMolecule(
+            mol,
+            highlightAtoms=_atoms,
+            highlightAtomColors=_acols,
+            highlightBonds=_bonds,
+            highlightBondColors=_bcols,
+        )
+        _d.FinishDrawing()
+        return Image.open(io.BytesIO(_d.GetDrawingText()))
+
+    # Draw top agree and disagree substructures
+    _n_show = min(6, max(len(_agree), len(_disagree)))
+
+    _fig, _axes = plt.subplots(2, _n_show, figsize=(_n_show * 4, 8))
+    if _n_show == 1:
+        _axes = _axes.reshape(2, 1)
+
+    # Row 0: agree
+    for _j in range(min(_n_show, len(_agree))):
+        _bit, _sv_s, _sv_t = _agree[_j]
+        _direction = "permeable" if _sv_s > 0 else "impermeable"
+        if _bit in _bit_to_example:
+            _mol, _center, _rad = _bit_to_example[_bit]
+            _img = _draw_bit_on_example(_bit, _mol, _center, _rad)
+            _axes[0][_j].imshow(_img)
+        _axes[0][_j].set_title(
+            f"AGREE: -> {_direction}\nS={_sv_s:+.3f} T={_sv_t:+.3f}",
+            fontsize=9,
+            color="#4CAF50",
+        )
+        _axes[0][_j].axis("off")
+
+    # Row 1: disagree
+    for _j in range(min(_n_show, len(_disagree))):
+        _bit, _sv_s, _sv_t = _disagree[_j]
+        _s_dir = "perm" if _sv_s > 0 else "imperm"
+        _t_dir = "perm" if _sv_t > 0 else "imperm"
+        if _bit in _bit_to_example:
+            _mol, _center, _rad = _bit_to_example[_bit]
+            _img = _draw_bit_on_example(_bit, _mol, _center, _rad)
+            _axes[1][_j].imshow(_img)
+        _axes[1][_j].set_title(
+            f"DISAGREE\nS={_sv_s:+.3f}({_s_dir}) T={_sv_t:+.3f}({_t_dir})",
+            fontsize=9,
+            color="#FF5722",
+        )
+        _axes[1][_j].axis("off")
+
+    # Hide unused axes
+    for _row in range(2):
+        _n_items = len(_agree) if _row == 0 else len(_disagree)
+        for _j in range(min(_n_show, _n_items), _n_show):
+            _axes[_row][_j].axis("off")
+
+    _fig.suptitle(
+        "Substructures: Models Agree (top) vs Disagree (bottom)",
+        fontsize=13,
     )
-    _ax1.set_yticks(range(20))
-    _ax1.set_yticklabels([f"bit {b}" for b in _top20_scratch], fontsize=9)
-    _ax1.set_xlabel("Mean |SHAP|")
-    _ax1.set_title("XGBoost Scratch: Top 20 Features")
-    _ax1.invert_yaxis()
-
-    _ax2.barh(
-        range(20), [_mean_abs_transfer[b] for b in _top20_transfer], color="#FF9800"
-    )
-    _ax2.set_yticks(range(20))
-    _ax2.set_yticklabels([f"bit {b}" for b in _top20_transfer], fontsize=9)
-    _ax2.set_xlabel("Mean |SHAP|")
-    _ax2.set_title("XGBoost RLM-Transfer: Top 20 Features")
-    _ax2.invert_yaxis()
-
     plt.tight_layout()
-
-    # Overlap in top features
-    _overlap = len(set(_top20_scratch) & set(_top20_transfer))
 
     mo.vstack(
         [
-            mo.md("## Global Feature Importance Comparison"),
-            mo.as_html(_fig_global),
+            mo.md("## Substructure Agreement and Disagreement"),
+            mo.as_html(_fig),
             mo.md(f"""
-    Top 20 features overlap: **{_overlap}/20** bits shared between scratch
-    and transfer models. The transfer model inherits feature importances from
-    the RLM pre-training, which may prioritize bits relevant to metabolic
-    stability rather than membrane permeability.
-        """),
+    **Agree** ({len(_agree)} substructures, green): Both models assign the
+    same direction (permeable or impermeable) to these chemical environments.
+    These are structural features with a consistent effect on PAMPA
+    permeability regardless of whether the model was pre-trained on RLM.
+
+    **Disagree** ({len(_disagree)} substructures, red): The scratch model
+    says one direction, the transfer model says the opposite. These are
+    substructures where the RLM pre-training introduced a bias -- the
+    transfer model learned an association from metabolic stability that
+    conflicts with what the scratch model learned from permeability data.
+    S = scratch mean SHAP, T = transfer mean SHAP. "perm" = pushes toward
+    permeable, "imperm" = pushes toward impermeable.
+            """),
         ]
     )
     return
