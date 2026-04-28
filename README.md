@@ -44,6 +44,20 @@ Eight model variants span two axes -- architecture and transfer strategy:
 | 7 | CheMeleon frozen single | D-MPNN (foundation init) | 615K trainable / 8.7M frozen | Foundation -> target (FFN only) |
 | 8 | CheMeleon frozen double | D-MPNN (foundation init) | 615K trainable / 8.7M frozen | Foundation -> RLM -> target (FFN only) |
 
+**No hyperparameter tuning was performed.** All models use default or
+near-default configurations. Chemprop uses library defaults throughout
+(d_h=300, depth=3, 1-layer FFN, no dropout, no batch norm, 30 epochs,
+batch size 64). XGBoost uses defaults except for a lower learning rate
+(0.1 vs default 0.3) and regularizing subsampling (subsample=0.8,
+colsample_bytree=0.8), with 200 boosting rounds and early stopping at
+20 rounds patience. CheMeleon inherits its encoder architecture from the
+foundation model weights and uses the same FFN/training configuration as
+Chemprop. This is deliberate: the comparison is between architectures and
+transfer strategies, not between tuning budgets. Any model could likely
+improve with hyperparameter search, but the relative rankings and
+especially the transfer failure modes are structural properties of the
+architectures, not artifacts of under-tuning.
+
 The two transfer targets test a clear hypothesis:
 
 - **RLM -> HLM** (related): Both measure microsomal metabolic stability.
