@@ -272,16 +272,22 @@ def _(
 @app.cell
 def _(Chem, Image, failure_info, io, mo, np, plt, rdMolDraw2D, saliency_data):
     def draw_saliency_on_mol(mol, atom_saliency, size=(450, 350)):
-        """Draw molecule with atoms colored by saliency (blue = high importance)."""
+        """Draw molecule with atoms colored by saliency.
+
+        Uses a power-law mapping (gamma=3) so only the most important
+        atoms stand out strongly. Low-saliency atoms are nearly transparent.
+        """
         _sal = np.array(atom_saliency)
         _max_sal = _sal.max() if _sal.max() > 0 else 1.0
         _norm = _sal / _max_sal
+        # Power-law: gamma=3 compresses low values, emphasizes high
+        _nonlinear = _norm**3
 
         _atoms = list(range(mol.GetNumAtoms()))
         _atom_colors = {}
         for _a in _atoms:
-            _intensity = float(_norm[_a])
-            _atom_colors[_a] = (0.13, 0.59, 0.95, _intensity * 0.7 + 0.1)
+            _v = float(_nonlinear[_a])
+            _atom_colors[_a] = (0.13, 0.59, 0.95, _v * 0.85 + 0.05)
 
         _bonds = list(range(mol.GetNumBonds()))
         _bond_colors = {}
@@ -289,8 +295,8 @@ def _(Chem, Image, failure_info, io, mo, np, plt, rdMolDraw2D, saliency_data):
             _bond = mol.GetBondWithIdx(_b)
             _a1 = _bond.GetBeginAtomIdx()
             _a2 = _bond.GetEndAtomIdx()
-            _avg = float((_norm[_a1] + _norm[_a2]) / 2)
-            _bond_colors[_b] = (0.13, 0.59, 0.95, _avg * 0.7 + 0.1)
+            _avg = float((_nonlinear[_a1] + _nonlinear[_a2]) / 2)
+            _bond_colors[_b] = (0.13, 0.59, 0.95, _avg * 0.85 + 0.05)
 
         _d = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
         _d.DrawMolecule(
@@ -340,12 +346,177 @@ def _(Chem, Image, failure_info, io, mo, np, plt, rdMolDraw2D, saliency_data):
         [
             mo.md("## Chemprop Atom Saliency: Failure Molecules"),
             mo.md("""
-    Per-atom gradient saliency for the same 5 PAMPA failure molecules.
-    Darker blue = higher gradient magnitude = more important for the
-    model's prediction. The scratch model (left) and transfer model (right)
-    may focus on different parts of the molecule.
+Per-atom gradient saliency for the same 5 PAMPA failure molecules.
+Darker blue = higher gradient magnitude = more important for the
+model's prediction. Uses a power-law color mapping (gamma=3) so only
+the most important atoms stand out. The scratch model (left) and
+transfer model (right) may focus on different parts of the molecule.
         """),
             *_outputs,
+        ]
+    )
+    return
+
+
+@app.cell
+def _(
+    Chem,
+    Image,
+    chemprop_data,
+    featurizer,
+    io,
+    logger,
+    mo,
+    model_scratch,
+    model_transfer,
+    np,
+    pampa_labels,
+    pampa_smiles,
+    plt,
+    rdMolDraw2D,
+    test_mask,
+    torch,
+):
+    # Aggregated atom-type saliency across all test molecules
+    _test_smi = [pampa_smiles[i] for i in range(len(pampa_smiles)) if test_mask[i]]
+    _test_y = pampa_labels[test_mask]
+
+    # Collect per-atom-type saliency across dataset
+    from collections import defaultdict
+
+    _atom_type_saliency_scratch = defaultdict(list)
+    _atom_type_saliency_transfer = defaultdict(list)
+
+    def _get_saliency(mpnn, smiles):
+        mpnn.eval()
+        _dp = chemprop_data.MoleculeDatapoint.from_smi(smiles, [0.0])
+        _dset = chemprop_data.MoleculeDataset([_dp], featurizer)
+        _loader = chemprop_data.build_dataloader(
+            _dset, num_workers=0, batch_size=1, shuffle=False
+        )
+        _batch = next(iter(_loader))
+        _bmg = _batch[0]
+        _bmg.V = _bmg.V.clone().requires_grad_(True)
+        _pred = mpnn(_bmg)
+        _pred.sum().backward()
+        return _bmg.V.grad.abs().sum(dim=1).detach().numpy()
+
+    # Sample 100 molecules for speed
+    _sample_idx = np.random.default_rng(42).choice(
+        len(_test_smi), size=min(100, len(_test_smi)), replace=False
+    )
+
+    for _i in _sample_idx:
+        _smi = _test_smi[_i]
+        _mol = Chem.MolFromSmiles(_smi)
+        if _mol is None:
+            continue
+        try:
+            _sal_s = _get_saliency(model_scratch, _smi)
+            _sal_t = _get_saliency(model_transfer, _smi)
+        except Exception:
+            continue
+
+        _n_atoms = _mol.GetNumAtoms()
+        if len(_sal_s) != _n_atoms or len(_sal_t) != _n_atoms:
+            continue
+
+        # Normalize per-molecule so we compare relative importance
+        _max_s = _sal_s.max() if _sal_s.max() > 0 else 1.0
+        _max_t = _sal_t.max() if _sal_t.max() > 0 else 1.0
+
+        for _a in range(_n_atoms):
+            _atom = _mol.GetAtomWithIdx(_a)
+            _symbol = _atom.GetSymbol()
+            _is_aromatic = _atom.GetIsAromatic()
+            _degree = _atom.GetDegree()
+            _key = f"{_symbol}{'(arom)' if _is_aromatic else ''} deg{_degree}"
+            _atom_type_saliency_scratch[_key].append(float(_sal_s[_a] / _max_s))
+            _atom_type_saliency_transfer[_key].append(float(_sal_t[_a] / _max_t))
+
+    logger.info(f"Collected saliency for {len(_atom_type_saliency_scratch)} atom types")
+
+    # Build comparison: mean saliency per atom type, scratch vs transfer
+    _atom_types = sorted(
+        _atom_type_saliency_scratch.keys(),
+        key=lambda k: np.mean(_atom_type_saliency_scratch[k]),
+        reverse=True,
+    )[:15]
+
+    _fig_agg, _ax = plt.subplots(figsize=(12, 6))
+    _x = np.arange(len(_atom_types))
+    _width = 0.35
+
+    _means_s = [np.mean(_atom_type_saliency_scratch[k]) for k in _atom_types]
+    _means_t = [np.mean(_atom_type_saliency_transfer[k]) for k in _atom_types]
+    _stds_s = [
+        np.std(_atom_type_saliency_scratch[k])
+        / np.sqrt(len(_atom_type_saliency_scratch[k]))
+        for k in _atom_types
+    ]
+    _stds_t = [
+        np.std(_atom_type_saliency_transfer[k])
+        / np.sqrt(len(_atom_type_saliency_transfer[k]))
+        for k in _atom_types
+    ]
+
+    _ax.barh(
+        _x - _width / 2,
+        _means_s,
+        _width,
+        xerr=_stds_s,
+        label="Scratch",
+        color="#2196F3",
+        alpha=0.7,
+        capsize=3,
+    )
+    _ax.barh(
+        _x + _width / 2,
+        _means_t,
+        _width,
+        xerr=_stds_t,
+        label="RLM-Transfer",
+        color="#FF9800",
+        alpha=0.7,
+        capsize=3,
+    )
+    _ax.set_yticks(_x)
+    _ax.set_yticklabels(_atom_types, fontsize=9)
+    _ax.set_xlabel("Mean Normalized Saliency")
+    _ax.set_title(
+        "Aggregated Atom-Type Saliency: Scratch vs Transfer (100 PAMPA molecules)"
+    )
+    _ax.legend()
+    _ax.invert_yaxis()
+    plt.tight_layout()
+
+    # Find biggest disagreements
+    _delta = [
+        (
+            k,
+            np.mean(_atom_type_saliency_transfer[k])
+            - np.mean(_atom_type_saliency_scratch[k]),
+        )
+        for k in _atom_types
+    ]
+    _delta.sort(key=lambda x: abs(x[1]), reverse=True)
+
+    mo.vstack(
+        [
+            mo.md("## Aggregated Atom-Type Saliency"),
+            mo.as_html(_fig_agg),
+            mo.md(f"""
+Mean normalized saliency per atom type across 100 sampled PAMPA test
+molecules. Atom types are labeled by element, aromaticity, and degree.
+Error bars show standard error of the mean.
+
+**Largest disagreements** (transfer - scratch):
+{"".join(f"- **{k}**: delta = {d:+.3f}" + chr(10) for k, d in _delta[:5])}
+
+Atom types where the transfer model assigns substantially more or less
+importance than the scratch model indicate where the RLM pre-training
+shifted the model's attention.
+        """),
         ]
     )
     return
