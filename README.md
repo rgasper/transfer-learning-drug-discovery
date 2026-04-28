@@ -719,10 +719,13 @@ Two supplementary analyses extend the main findings:
   intermediate RLM step alters what the frozen encoder attends to.
 
 - **Reverse transfer: PAMPA→RLM** ([docs/reverse-transfer.md](docs/reverse-transfer.md),
-  notebook 14): Tests whether the architectural vulnerability is
-  symmetric. Pre-trains on PAMPA, finetunes on RLM. If our thesis holds,
-  XGBoost should again suffer negative transfer while Chemprop remains
-  robust.
+  notebook 14): The pattern is symmetric. XGBoost PAMPA-transfer drops
+  from ~0.50 to ~0.38 AUC-PR on RLM (catastrophic), while Chemprop
+  PAMPA-transfer improves slightly from ~0.57 to ~0.59 (not significant).
+  Both XGBoost variants are significantly worse than both Chemprop
+  variants. The architectural vulnerability to irrelevant transfer is
+  not directional -- it's a general property of decision-boundary
+  transfer.
 
 ---
 
