@@ -545,16 +545,16 @@ def _(
             mo.md("## Aggregated Atom-Type Saliency"),
             mo.as_html(_fig_agg),
             mo.md(f"""
-Mean normalized saliency per atom type across 100 sampled PAMPA test
-molecules. Atom types are labeled by element, aromaticity, and degree.
-Error bars show standard error of the mean.
+    Mean normalized saliency per atom type across 100 sampled PAMPA test
+    molecules. Atom types are labeled by element, aromaticity, and degree.
+    Error bars show standard error of the mean.
 
-**Largest disagreements** (transfer - scratch):
-{"".join(f"- **{k}**: delta = {d:+.3f}" + chr(10) for k, d in _delta[:5])}
+    **Largest disagreements** (transfer - scratch):
+    {"".join(f"- **{k}**: delta = {d:+.3f}" + chr(10) for k, d in _delta[:5])}
 
-Atom types where the transfer model assigns substantially more or less
-importance than the scratch model indicate where the RLM pre-training
-shifted the model's attention.
+    Atom types where the transfer model assigns substantially more or less
+    importance than the scratch model indicate where the RLM pre-training
+    shifted the model's attention.
         """),
         ]
     )
@@ -686,16 +686,16 @@ def _(
             mo.md("## Substructure Agreement and Disagreement"),
             mo.as_html(_fig),
             mo.md(f"""
-**Agree** ({len(agree_atom_types)} atom types, green): Both models
-assign similar relative importance to these atom types (difference < 0.02).
-Highlighted atoms show the atom type in context on an example molecule.
+    **Agree** ({len(agree_atom_types)} atom types, green): Both models
+    assign similar relative importance to these atom types (difference < 0.02).
+    Highlighted atoms show the atom type in context on an example molecule.
 
-**Disagree** ({len(disagree_atom_types)} atom types, red): The transfer
-model assigns substantially different importance than scratch
-(difference >= 0.04). These are atom environments where RLM pre-training
-shifted the D-MPNN's learned representation.
+    **Disagree** ({len(disagree_atom_types)} atom types, red): The transfer
+    model assigns substantially different importance than scratch
+    (difference >= 0.04). These are atom environments where RLM pre-training
+    shifted the D-MPNN's learned representation.
 
-S = scratch mean normalized saliency, T = transfer mean normalized saliency.
+    S = scratch mean normalized saliency, T = transfer mean normalized saliency.
         """),
         ]
     )
