@@ -80,6 +80,10 @@ three base architectures on RLM using the same 5x5 CV protocol:
 
 ![RLM base model comparison](docs/figures/rlm-base-comparison.png)
 
+*Left: AUC-PR distributions for each architecture on RLM (5x5 CV, 25
+folds). Dotted line = random baseline (0.298). Right: Tukey HSD (FWER =
+0.05). XGBoost (red) is significantly worse than the D-MPNN reference.*
+
 XGBoost on Morgan fingerprints underperforms both D-MPNN architectures
 on RLM (Tukey HSD, FWER = 0.05) and shows substantially higher variance
 across folds. Chemprop and CheMeleon are statistically indistinguishable
@@ -134,7 +138,14 @@ HSD, FWER = 0.05).
 
 ![HLM boxplots](docs/figures/boxplots-hlm-auc-pr.png)
 
+*AUC-PR distributions across 25 CV folds. Dotted line = random baseline
+(positive class prevalence, 0.602). Box = IQR, whiskers = 1.5x IQR.*
+
 ![Tukey HSD HLM](docs/figures/tukey-hsd-hlm-auc-pr.png)
+
+*Tukey HSD simultaneous confidence intervals (FWER = 0.05). Reference =
+best mean. Red = significantly worse than reference. Gray = not
+significantly different.*
 
 Transfer helps *every* architecture. Comparing each transfer variant to
 its own scratch baseline: XGBoost gains +0.049 (0.739 -> 0.789),
@@ -167,11 +178,23 @@ underlying enzymatic chemistry is conserved.
 
 ![RLM vs HLM correlation](docs/figures/eda-correlation-rlm-hlm.png)
 
+*Scatter of continuous endpoint values for the 27 compounds shared
+between RLM and HLM (uncensored in both). Weak correlation (r=0.54)
+despite shared biochemistry -- transfer benefit comes from structural
+rules, not shared data points.*
+
 To make this concrete, we computed feature importance for both
 architectures on HLM: SHAP values for XGBoost's Morgan fingerprint bits
 and per-atom gradient saliency for Chemprop's D-MPNN.
 
 ![HLM feature importance](docs/figures/hlm-feature-importance.png)
+
+*Left (XGBoost): Top 6 Morgan FP bits by mean |SHAP| on HLM test
+molecules. Fragment = radius-3 neighborhood from the molecule where that
+bit contributed most. Blue = pushes toward "stable"; red = "unstable."
+Right (Chemprop): Top 6 atom types by mean gradient saliency across all
+HLM test molecules. Fragment = 1-bond neighborhood around the
+highest-saliency instance (center atom highlighted blue). Error bars = SEM.*
 
 Both architectures converge on the same structural story. XGBoost's top
 SHAP features (left) highlight Morgan fingerprint bits corresponding to
@@ -214,6 +237,10 @@ harm must come from *wrong* learned associations being inherited.
 
 ![RLM vs PAMPA correlation](docs/figures/eda-correlation-rlm-pampa.png)
 
+*Scatter of continuous endpoint values for the 985 compounds shared
+between RLM and PAMPA (uncensored in both). No correlation -- these
+endpoints measure fundamentally different physical processes.*
+
 No correlation between RLM half-life and PAMPA permeability --
 mechanistically distinct endpoints.
 
@@ -221,6 +248,11 @@ What does a model *correctly* trained on PAMPA attend to? The scratch
 models (trained without RLM transfer) provide the answer:
 
 ![PAMPA feature importance](docs/figures/pampa-feature-importance.png)
+
+*Same methodology as the HLM figure. Left (XGBoost): Top 6 Morgan FP
+bits by mean |SHAP|. Blue = "permeable"; red = "impermeable." Right
+(Chemprop): Top 6 atom types by mean gradient saliency across all PAMPA
+test molecules.*
 
 Both architectures attend to lipophilic fragments and aromatic systems --
 structural features governing passive membrane permeability. These are
@@ -248,7 +280,15 @@ HSD, FWER = 0.05).
 
 ![PAMPA boxplots](docs/figures/boxplots-pampa-auc-pr.png)
 
+*AUC-PR distributions across 25 CV folds. Dotted line = random baseline
+(positive class prevalence, 0.855). XGBoost RLM-transfer sits at the
+baseline -- no better than guessing the majority class.*
+
 ![Tukey HSD PAMPA](docs/figures/tukey-hsd-pampa-auc-pr.png)
+
+*Tukey HSD simultaneous confidence intervals (FWER = 0.05). XGBoost
+RLM-transfer is the sole red outlier. All other models are statistically
+indistinguishable from the best.*
 
 The PAMPA random baseline is 0.855 (positive class prevalence). XGBoost
 RLM-transfer (0.853) performs *at or below* the random baseline --
@@ -318,6 +358,10 @@ and 9 show disagreement (opposite directions).
 
 ![Substructure agreement/disagreement](docs/figures/shap-substructure-agree-disagree.png)
 
+*Top 50 SHAP features from both XGBoost scratch and XGBoost RLM-transfer
+on PAMPA. Green = both models push the same direction. Red = opposite
+directions (transfer model inherits wrong association from RLM).*
+
 **Agreed substructures (green)** include aromatic ring systems and
 lipophilic fragments that both models correctly associate with
 permeability. These are structural features whose effect on PAMPA
@@ -356,6 +400,10 @@ attention pattern is less directly distorted by the old task.
 
 ![Chemprop substructure agree/disagree](docs/figures/chemprop-substructure-agree-disagree.png)
 
+*Same analysis for Chemprop: per-atom gradient saliency aggregated by
+atom type. Far fewer and smaller disagreements between scratch and
+transfer models -- the re-initialized FFN head prevents inherited bias.*
+
 The per-molecule saliency difference maps (transfer minus scratch,
 red/green diverging gradient) confirm this: for the same failure
 molecules where XGBoost transfer was catastrophically wrong, Chemprop
@@ -363,6 +411,10 @@ transfer shows only modest shifts in atom-level attention, and both
 Chemprop models correctly predict the molecules as permeable.
 
 ![XGBoost vs Chemprop failure comparison](docs/figures/xgb-vs-chemprop-failure-comparison.png)
+
+*Per-molecule saliency/SHAP comparison on a PAMPA test molecule that
+XGBoost RLM-transfer gets catastrophically wrong but Chemprop handles
+correctly. Red = atoms/bits pushing toward wrong prediction.*
 
 **XGBoost failure molecule #1** (true: permeable):
 - XGBoost scratch: P(active) = 0.918 (correct)
@@ -428,7 +480,12 @@ variants should improve.
 
 ![CheMeleon frozen vs unfrozen boxplots](docs/figures/chemeleon-frozen-boxplots.png)
 
+*AUC-PR distributions for CheMeleon variants only. Green = unfrozen
+(all weights finetuned). Purple = frozen encoder (FFN only).*
+
 ![CheMeleon frozen vs unfrozen Tukey HSD](docs/figures/chemeleon-frozen-tukey-hsd.png)
+
+*Tukey HSD comparing frozen vs unfrozen CheMeleon variants (FWER = 0.05).*
 
 **HLM**: No significant differences between any frozen/unfrozen variant
 (Tukey HSD, all p > 0.06). The encoder adaptation during full finetuning
@@ -586,6 +643,9 @@ measure.
 
 ![Class balance](docs/figures/eda-class-balance.png)
 
+*Binary label distributions. HLM is roughly balanced; PAMPA is heavily
+imbalanced (86% permeable), motivating AUC-PR as the primary metric.*
+
 #### Molecule overlap
 
 | Pair | Shared Molecules | % of Smaller Set | Shared Scaffolds | % of Smaller Set |
@@ -603,6 +663,9 @@ minimal overlap with either endpoint.
 
 ![Continuous value distributions](docs/figures/eda-continuous-distributions.png)
 
+*Raw continuous assay values before binarization. Censored values
+(at assay limits) shown separately.*
+
 #### Chemical space (PaCMAP)
 
 Morgan fingerprints (2048-bit, radius 3) embedded to 2D via PaCMAP.
@@ -610,7 +673,13 @@ A single shared embedding across all endpoints.
 
 ![PaCMAP scatter by label](docs/figures/eda-pacmap-scatter.png)
 
+*2D PaCMAP embedding of Morgan fingerprints, colored by binary label.
+Single shared embedding across all endpoints.*
+
 ![PaCMAP hexbin density](docs/figures/eda-pacmap-hexbin.png)
+
+*Same embedding as hexbin density plot, showing compound density
+across chemical space.*
 
 ### Splitting strategy
 
@@ -641,6 +710,10 @@ cross-fold distances should exceed within-fold distances.
 
 ![Tanimoto 5-NN distances](docs/figures/fold-tanimoto-nn.png)
 
+*Distribution of Tanimoto distances to 5 nearest neighbors: within-fold
+(same test fold) vs cross-fold (training folds). Larger cross-fold
+distances indicate chemically distinct splits.*
+
 | Endpoint | Within-fold median | Cross-fold median | Shift |
 |---|---|---|---|
 | RLM Stability | 0.576 | 0.774 | +0.198 |
@@ -661,6 +734,10 @@ comparison avoids penalizing mere index permutations -- it measures
 whether the shuffled replicates produce genuinely different partitions.
 
 ![Replicate variation](docs/figures/fold-replicate-variation.png)
+
+*Best-match Jaccard similarity between folds across replicates. Low
+values (~0.25) confirm the 5 replicates produce genuinely different
+partitions.*
 
 | Endpoint | Mean best-match Jaccard | Range |
 |---|---|---|
@@ -728,9 +805,16 @@ for details.
 
 ![XGBoost boxplots](docs/figures/xgb-boxplots.png)
 
+*XGBoost-only comparison: scratch vs RLM-transfer on both endpoints.*
+
 ![XGBoost paired comparison](docs/figures/xgb-paired-comparison.png)
 
+*Paired fold comparison (lines connect same fold). Blue = transfer wins,
+red = scratch wins.*
+
 ![XGBoost Tukey HSD](docs/figures/xgb-tukey-hsd.png)
+
+*XGBoost-only Tukey HSD (FWER = 0.05).*
 
 ---
 

@@ -402,13 +402,13 @@ def _(
 
         _center_in_sub = _amap.get(center_atom, -1)
         _highlight_atoms = list(range(_submol.GetNumAtoms()))
-        # Color all atoms light gray, center atom bright blue
+        # Color all atoms light gray, center atom medium blue (reduced alpha)
         _atom_colors = {a: (0.92, 0.92, 0.92, 1.0) for a in _highlight_atoms}
         if _center_in_sub >= 0:
-            _atom_colors[_center_in_sub] = (0.0, 0.45, 0.9, 1.0)
+            _atom_colors[_center_in_sub] = (0.4, 0.65, 0.9, 0.5)
         _atom_radii = {a: 0.3 for a in _highlight_atoms}
         if _center_in_sub >= 0:
-            _atom_radii[_center_in_sub] = 0.5
+            _atom_radii[_center_in_sub] = 0.4
 
         _d = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
         _opts = _d.drawOptions()
@@ -536,9 +536,9 @@ def _(
                 if _img is not None:
                     _inset = _ax_cp_img.inset_axes(
                         [
-                            0.0,
+                            0.15,
                             (_n_chemprop - 1 - _j) / _n_chemprop,
-                            1.0,
+                            0.85,
                             0.9 / _n_chemprop,
                         ],
                         transform=_ax_cp_img.transAxes,

@@ -400,10 +400,13 @@ def _(
             return None
 
         _center_in_sub = _amap.get(center_atom, -1)
-        _highlight_atoms = [_center_in_sub] if _center_in_sub >= 0 else []
-        _atom_colors = (
-            {_center_in_sub: (0.2, 0.6, 1.0, 1.0)} if _center_in_sub >= 0 else {}
-        )
+        _highlight_atoms = list(range(_submol.GetNumAtoms()))
+        _atom_colors = {a: (0.92, 0.92, 0.92, 1.0) for a in _highlight_atoms}
+        if _center_in_sub >= 0:
+            _atom_colors[_center_in_sub] = (0.4, 0.65, 0.9, 0.5)
+        _atom_radii = {a: 0.3 for a in _highlight_atoms}
+        if _center_in_sub >= 0:
+            _atom_radii[_center_in_sub] = 0.4
 
         _d = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
         _opts = _d.drawOptions()
@@ -414,6 +417,7 @@ def _(
             _submol,
             highlightAtoms=_highlight_atoms,
             highlightAtomColors=_atom_colors,
+            highlightAtomRadii=_atom_radii,
         )
         _d.FinishDrawing()
         return Image.open(io.BytesIO(_d.GetDrawingText()))
@@ -517,9 +521,9 @@ def _(
                 if _img is not None:
                     _inset = _ax_cp_img.inset_axes(
                         [
-                            0.0,
+                            0.15,
                             (_n_chemprop - 1 - _j) / _n_chemprop,
-                            1.0,
+                            0.85,
                             0.9 / _n_chemprop,
                         ],
                         transform=_ax_cp_img.transAxes,
