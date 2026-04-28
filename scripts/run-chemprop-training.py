@@ -132,7 +132,7 @@ def train_and_predict(
         logger=False,
         enable_checkpointing=False,
         enable_progress_bar=False,
-        accelerator="cpu",
+        accelerator="gpu",
         devices=1,
         max_epochs=max_epochs,
     )
@@ -209,7 +209,7 @@ def main() -> None:
             logger=False,
             enable_checkpointing=False,
             enable_progress_bar=False,
-            accelerator="cpu",
+            accelerator="gpu",
             devices=1,
             max_epochs=PRETRAIN_MAX_EPOCHS,
         )

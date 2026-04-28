@@ -236,7 +236,7 @@ def main() -> None:
             logger=False,
             enable_checkpointing=False,
             enable_progress_bar=False,
-            accelerator="cpu",
+            accelerator="gpu",
             devices=1,
             max_epochs=RLM_FINETUNE_MAX_EPOCHS,
         )
