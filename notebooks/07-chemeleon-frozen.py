@@ -36,7 +36,7 @@ def _():
     from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
     DATA_DIR = Path("data")
-    return DATA_DIR, logger, np, pairwise_tukeyhsd, pl, plt, sns, stats
+    return DATA_DIR, logger, pairwise_tukeyhsd, pl, plt, sns, stats
 
 
 @app.cell
@@ -52,7 +52,7 @@ def _(DATA_DIR, logger, pl):
     # Combine for comparison
     chemeleon_compare_df = pl.concat([frozen_df, unfrozen_df])
     logger.info(f"Combined: {chemeleon_compare_df.height} results")
-    return chemeleon_compare_df, frozen_df, unfrozen_df
+    return (chemeleon_compare_df,)
 
 
 @app.cell
@@ -74,12 +74,12 @@ def _(chemeleon_compare_df, mo, pl):
             mo.md("## CheMeleon: Frozen vs Unfrozen Encoder"),
             mo.ui.table(_summary),
             mo.md("""
-**Frozen**: only the FFN head is trained (~615K params). The 8.7M-param
-message-passing encoder is frozen at its pre-trained weights.
+    **Frozen**: only the FFN head is trained (~615K params). The 8.7M-param
+    message-passing encoder is frozen at its pre-trained weights.
 
-**Unfrozen** (original): all 9.3M params are trainable during finetuning.
+    **Unfrozen** (original): all 9.3M params are trainable during finetuning.
 
-If overfitting is the issue, frozen should outperform unfrozen.
+    If overfitting is the issue, frozen should outperform unfrozen.
         """),
         ]
     )
@@ -168,7 +168,7 @@ def _(chemeleon_compare_df, mo, pl, plt, sns):
 
 
 @app.cell
-def _(chemeleon_compare_df, mo, np, pl, stats):
+def _(chemeleon_compare_df, mo, pl, stats):
     # Paired comparison: frozen vs unfrozen for each variant
     _comparisons = []
     _pairs = [
@@ -224,10 +224,10 @@ def _(chemeleon_compare_df, mo, np, pl, stats):
             mo.md("## Paired Comparison: Frozen vs Unfrozen"),
             mo.ui.table(_comp_df),
             mo.md("""
-Positive delta means freezing the encoder *improved* performance
-(supporting the overfitting hypothesis). Negative delta means freezing
-*hurt* (foundation representations alone are insufficient, task-specific
-encoder adaptation is needed).
+    Positive delta means freezing the encoder *improved* performance
+    (supporting the overfitting hypothesis). Negative delta means freezing
+    *hurt* (foundation representations alone are insufficient, task-specific
+    encoder adaptation is needed).
         """),
         ]
     )
@@ -237,21 +237,21 @@ encoder adaptation is needed).
 @app.cell
 def _(mo):
     mo.md("""
-## Interpretation
+    ## Interpretation
 
-**If frozen > unfrozen**: the CheMeleon encoder's pre-trained
-representations are good enough for these tasks, and the full-finetune
-models were indeed overfitting the encoder weights to small training sets.
-Freezing acts as a strong regularizer.
+    **If frozen > unfrozen**: the CheMeleon encoder's pre-trained
+    representations are good enough for these tasks, and the full-finetune
+    models were indeed overfitting the encoder weights to small training sets.
+    Freezing acts as a strong regularizer.
 
-**If frozen < unfrozen**: the pre-trained representations need adaptation
-for these specific ADME endpoints. The overfitting hypothesis is wrong (or
-at least insufficient) — the encoder genuinely needs to learn task-specific
-features, and the capacity issue lies elsewhere.
+    **If frozen < unfrozen**: the pre-trained representations need adaptation
+    for these specific ADME endpoints. The overfitting hypothesis is wrong (or
+    at least insufficient) — the encoder genuinely needs to learn task-specific
+    features, and the capacity issue lies elsewhere.
 
-**If frozen ≈ unfrozen**: the encoder adaptation during finetuning is
-neither helping nor hurting much — the FFN head capacity is the binding
-constraint regardless of whether the encoder is frozen.
+    **If frozen ≈ unfrozen**: the encoder adaptation during finetuning is
+    neither helping nor hurting much — the FFN head capacity is the binding
+    constraint regardless of whether the encoder is frozen.
     """)
     return
 

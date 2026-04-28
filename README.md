@@ -239,6 +239,52 @@ regularization by steering the model toward a drug-discovery-relevant
 region of weight space before task-specific finetuning. But it is still
 not enough to overcome the capacity mismatch.
 
+### Frozen encoder experiment: testing the overfitting hypothesis
+
+To test whether CheMeleon's underperformance is due to overfitting the
+encoder, we froze the 8.7M-parameter BondMessagePassing layer and trained
+only the FFN head (~615K params). If the foundation representations are
+good enough and the full-finetune models were overfitting, the frozen
+variants should improve.
+
+| Target | Model | AUC-ROC (mean +/- std) |
+|---|---|---|
+| **HLM** | CheMeleon single-finetune (unfrozen) | 0.739 +/- 0.037 |
+| | CheMeleon double-finetune (unfrozen) | 0.764 +/- 0.038 |
+| | CheMeleon frozen single | 0.755 +/- 0.034 |
+| | CheMeleon frozen double | 0.756 +/- 0.034 |
+| **PAMPA** | CheMeleon single-finetune (unfrozen) | 0.676 +/- 0.044 |
+| | CheMeleon double-finetune (unfrozen) | 0.686 +/- 0.044 |
+| | **CheMeleon frozen single** | **0.730 +/- 0.055** |
+| | **CheMeleon frozen double** | **0.730 +/- 0.056** |
+
+![CheMeleon frozen vs unfrozen boxplots](docs/figures/chemeleon-frozen-boxplots.png)
+
+![CheMeleon frozen vs unfrozen Tukey HSD](docs/figures/chemeleon-frozen-tukey-hsd.png)
+
+**HLM**: No significant differences between any frozen/unfrozen variant
+(Tukey HSD, all p > 0.06). The encoder adaptation during full finetuning
+neither helps nor hurts for the related endpoint. The CheMeleon
+representations are already reasonable for microsomal stability
+prediction, and the FFN head has enough capacity to learn the mapping
+regardless of whether the encoder is tuned.
+
+**PAMPA**: Freezing significantly improves performance. Frozen single
+(0.730) outperforms unfrozen single (0.676) by +0.054 AUC (p = 0.001).
+Frozen double (0.730) outperforms unfrozen double (0.686) by +0.044 AUC
+(p = 0.013). This confirms the overfitting hypothesis for the unrelated
+endpoint: when the target task is dissimilar from the pre-training
+objective, unrestricted finetuning of the large encoder destroys the
+general representations. Freezing prevents this degradation.
+
+Notably, the frozen CheMeleon models (0.730) now outperform Chemprop
+RLM-transfer (0.716) on PAMPA, though this difference was not tested
+for significance in the frozen-only comparison. The frozen CheMeleon
+representations -- learned from 1M PubChem compounds predicting Mordred
+descriptors -- appear to be genuinely useful general molecular features,
+but only when the model is prevented from overwriting them during
+finetuning on a small dataset.
+
 ### Key takeaway
 
 On this dataset and at this scale (~900-2,500 compounds per endpoint):
@@ -253,11 +299,13 @@ On this dataset and at this scale (~900-2,500 compounds per endpoint):
   for Chemprop (+0.015), and marginally helpful for CheMeleon (+0.010).
   The D-MPNN architectures were more robust to irrelevant pre-training
   than the tree ensemble.
-- The 9.3M-parameter CheMeleon foundation model did not outperform the
-  318K-parameter Chemprop model on either endpoint. Whether this reflects
-  overfitting at this data scale, a mismatch between Mordred descriptor
-  pre-training and these specific ADME tasks, or something else is not
-  clear from this experiment alone.
+- The 9.3M-parameter CheMeleon foundation model underperformed the
+  318K-parameter Chemprop model when fully finetuned. The frozen-encoder
+  experiment confirmed this was due to overfitting: freezing the encoder
+  and training only the FFN head improved PAMPA AUC by +0.054 (p = 0.001),
+  and the frozen CheMeleon became the best PAMPA model overall (0.730).
+  For HLM, freezing made no significant difference -- the encoder
+  representations were already adequate for the related task.
 
 These results are specific to the NCATS ADME public subsets and the
 particular model configurations tested. Different dataset sizes, endpoint
@@ -276,9 +324,11 @@ xfer-learning/
     04-train-chemprop.py               # Marimo: Chemprop results visualization
     05-chemeleon.py                    # Marimo: CheMeleon + combined comparison
     06-analysis.py                     # Marimo: final analysis and discussion
+    07-chemeleon-frozen.py             # Marimo: frozen encoder comparison
   scripts/
     run-chemprop-training.py           # Chemprop CV training with disk caching
     run-chemeleon-training.py          # CheMeleon CV training with disk caching
+    run-chemeleon-frozen-training.py   # CheMeleon frozen encoder training
   src/xfer_learning/                   # Package (placeholder)
   data/                                # Downloaded/processed data (gitignored)
   docs/
@@ -297,16 +347,16 @@ uv run marimo edit notebooks/01-data-acquisition.py
 uv run marimo edit notebooks/02-eda.py
 uv run marimo edit notebooks/03-train-baselines.py
 
-# Run Chemprop training (standalone, with per-fold caching)
+# Run training scripts (standalone, with per-fold caching)
 uv run python scripts/run-chemprop-training.py
-
-# Run CheMeleon training (standalone, with per-fold caching)
 uv run python scripts/run-chemeleon-training.py
+uv run python scripts/run-chemeleon-frozen-training.py
 
 # View results
 uv run marimo edit notebooks/04-train-chemprop.py
 uv run marimo edit notebooks/05-chemeleon.py
 uv run marimo edit notebooks/06-analysis.py
+uv run marimo edit notebooks/07-chemeleon-frozen.py
 ```
 
 ## References
