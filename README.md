@@ -241,17 +241,28 @@ not enough to overcome the capacity mismatch.
 
 ### Key takeaway
 
-For small ADME datasets (~1,000-2,000 compounds), a right-sized D-MPNN
-(318K params) with domain-specific transfer learning outperforms both
-larger foundation models and traditional ML with fixed fingerprints. The
-benefit of learned representations over fixed fingerprints is most visible
-in the unrelated transfer case: Chemprop handles it gracefully while
-XGBoost fails catastrophically.
+On this dataset and at this scale (~900-2,500 compounds per endpoint):
 
-Foundation models like CheMeleon may become more valuable as dataset
-sizes grow or when no related pre-training data is available, but for the
-dataset sizes tested here, they are outcompeted by smaller, domain-tuned
-models.
+- Transfer learning from a mechanistically related endpoint (RLM->HLM)
+  improved all architectures tested. The benefit was present even with
+  only 5.6% molecule overlap between source and target, suggesting the
+  models learn transferable structural rules rather than memorizing
+  specific compounds.
+- Transfer learning from a mechanistically unrelated endpoint (RLM->PAMPA)
+  was catastrophic for XGBoost (-0.150 AUC), harmless-to-slightly-helpful
+  for Chemprop (+0.015), and marginally helpful for CheMeleon (+0.010).
+  The D-MPNN architectures were more robust to irrelevant pre-training
+  than the tree ensemble.
+- The 9.3M-parameter CheMeleon foundation model did not outperform the
+  318K-parameter Chemprop model on either endpoint. Whether this reflects
+  overfitting at this data scale, a mismatch between Mordred descriptor
+  pre-training and these specific ADME tasks, or something else is not
+  clear from this experiment alone.
+
+These results are specific to the NCATS ADME public subsets and the
+particular model configurations tested. Different dataset sizes, endpoint
+types, hyperparameter choices, or pre-training strategies could yield
+different rankings.
 
 ## Project Structure
 
