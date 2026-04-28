@@ -87,7 +87,14 @@ def _(CHECKPOINTS_DIR, DATA_DIR, logger, nn, np, torch):
         f"PAMPA: {len(pampa_smiles)} molecules, RLM: {len(rlm_smiles)} molecules, "
         f"CheMeleon encoder: {sum(p.numel() for p in chemeleon_mp.parameters())} params"
     )
-    return chemeleon_mp, pampa_folds, pampa_labels, pampa_smiles, rlm_labels, rlm_smiles
+    return (
+        chemeleon_mp,
+        pampa_folds,
+        pampa_labels,
+        pampa_smiles,
+        rlm_labels,
+        rlm_smiles,
+    )
 
 
 @app.cell
@@ -225,13 +232,7 @@ def _(
     cm_single_top = sorted(
         cm_single_means.keys(), key=lambda k: cm_single_means[k], reverse=True
     )[:6]
-    return (
-        cm_single_best,
-        cm_single_means,
-        cm_single_stderrs,
-        cm_single_test_mask,
-        cm_single_top,
-    )
+    return cm_single_best, cm_single_means, cm_single_stderrs, cm_single_top
 
 
 @app.cell
@@ -417,14 +418,14 @@ def _(
     Chem,
     FIGURES_DIR,
     Image,
-    cm_single_best,
-    cm_single_means,
-    cm_single_stderrs,
-    cm_single_top,
     cm_double_best,
     cm_double_means,
     cm_double_stderrs,
     cm_double_top,
+    cm_single_best,
+    cm_single_means,
+    cm_single_stderrs,
+    cm_single_top,
     io,
     logger,
     mo,
@@ -581,11 +582,11 @@ def _(
             mo.md("## PAMPA: CheMeleon Frozen Single vs Double-Finetune"),
             mo.as_html(_fig),
             mo.md("""
-*Top 6 atom types by gradient saliency. Since the encoder is frozen in
-both variants, any difference reflects the FFN head learning different
-feature-to-target mappings. Near-identical attention patterns would
-confirm the frozen encoder provides stable, general-purpose features
-regardless of the intermediate RLM training step. Single fold.*
+    *Top 6 atom types by gradient saliency. Since the encoder is frozen in
+    both variants, any difference reflects the FFN head learning different
+    feature-to-target mappings. Near-identical attention patterns would
+    confirm the frozen encoder provides stable, general-purpose features
+    regardless of the intermediate RLM training step. Single fold.*
         """),
         ]
     )

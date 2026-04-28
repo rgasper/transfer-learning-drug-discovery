@@ -46,6 +46,7 @@ def _():
     return (
         DATA_DIR,
         FIGURES_DIR,
+        average_precision_score,
         chemprop_data,
         featurizers,
         lightning_pl,
@@ -57,7 +58,6 @@ def _():
         pl,
         plt,
         roc_auc_score,
-        average_precision_score,
         sns,
         torch,
         xgb,
@@ -90,7 +90,6 @@ def _(DATA_DIR, logger, np):
 
     logger.info(f"RLM: {len(rlm_smiles)}, PAMPA: {len(pampa_smiles)}")
     return (
-        global_fps,
         pampa_X,
         pampa_labels,
         pampa_smiles,
@@ -104,6 +103,7 @@ def _(DATA_DIR, logger, np):
 
 @app.cell
 def _(
+    DATA_DIR,
     average_precision_score,
     chemprop_data,
     featurizers,
@@ -361,7 +361,16 @@ def _(
 
 
 @app.cell
-def _(FIGURES_DIR, logger, mo, np, pairwise_tukeyhsd, pl, plt, reverse_results_df, sns):
+def _(
+    FIGURES_DIR,
+    logger,
+    mo,
+    pairwise_tukeyhsd,
+    pl,
+    plt,
+    reverse_results_df,
+    sns,
+):
     """Visualize reverse transfer results."""
     _model_order = [
         "XGBoost scratch",
@@ -441,12 +450,12 @@ def _(FIGURES_DIR, logger, mo, np, pairwise_tukeyhsd, pl, plt, reverse_results_d
             mo.as_html(_fig),
             mo.ui.table(_summary),
             mo.md("""
-If our thesis is correct:
-- **XGBoost PAMPA-transfer** should hurt (negative transfer, like RLM→PAMPA did)
-- **Chemprop PAMPA-transfer** should be harmless or slightly helpful (encoder features generalize)
+    If our thesis is correct:
+    - **XGBoost PAMPA-transfer** should hurt (negative transfer, like RLM→PAMPA did)
+    - **Chemprop PAMPA-transfer** should be harmless or slightly helpful (encoder features generalize)
 
-This mirrors the RLM→PAMPA experiment but in reverse, testing whether the
-architectural robustness property holds symmetrically.
+    This mirrors the RLM→PAMPA experiment but in reverse, testing whether the
+    architectural robustness property holds symmetrically.
         """),
         ]
     )
