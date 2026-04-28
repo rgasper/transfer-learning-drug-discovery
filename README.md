@@ -65,8 +65,12 @@ minimal overlap with either endpoint.
 ![Correlation scatter](docs/figures/eda-correlation-scatter.png)
 
 RLM vs PAMPA (left) shows no correlation -- mechanistically distinct
-endpoints. RLM vs HLM (right) shows a positive trend for the small
-number of shared compounds.
+endpoints. RLM vs HLM (right) has only 27 shared uncensored compounds
+and no convincing correlation (Pearson r=0.54 on n=27), despite both
+measuring microsomal stability. The small overlap and weak correlation
+underscore that the transfer learning benefit for HLM must come from
+shared structural rules governing metabolic stability, not from
+information about specific shared compounds.
 
 ### Chemical Space (PaCMAP)
 
