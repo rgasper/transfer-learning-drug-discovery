@@ -93,6 +93,51 @@ splits:
 4. 5 replicates x 5 folds = 25 train/test splits per experiment
 5. Same splits across all model types for paired comparisons
 
+### Fold Quality Assessment
+
+Two diagnostics confirm the splits produce chemically distinct,
+non-redundant folds.
+
+**Chemical distinctness (5-NN Tanimoto distance).** For each molecule in
+the test fold, we compute the Tanimoto distance to its 5 nearest
+neighbors in the training folds (cross-fold) vs within the same test fold
+(within-fold). If splits separate chemically distinct neighborhoods,
+cross-fold distances should exceed within-fold distances.
+
+![Tanimoto 5-NN distances](docs/figures/fold-tanimoto-nn.png)
+
+| Endpoint | Within-fold median | Cross-fold median | Shift |
+|---|---|---|---|
+| RLM Stability | 0.576 | 0.774 | +0.198 |
+| HLM Stability | 0.816 | 0.811 | -0.005 |
+| PAMPA pH 7.4 | 0.619 | 0.775 | +0.156 |
+
+RLM and PAMPA show clear separation: cross-fold 5-NN distances are
+substantially larger than within-fold, confirming molecules in the test
+fold are more chemically distant from the training set than from their
+own fold-mates. HLM shows minimal shift, likely because the dataset is
+small (900 compounds) and the chemical space is compact — even molecules
+in different folds are not far apart.
+
+**Replicate variation (best-match Jaccard).** For each fold in replicate
+A, we find the fold in replicate B with the highest molecule overlap
+(Jaccard similarity). Since fold indices are arbitrary, this best-match
+comparison avoids penalizing mere index permutations — it measures
+whether the shuffled replicates produce genuinely different partitions.
+
+![Replicate variation](docs/figures/fold-replicate-variation.png)
+
+| Endpoint | Mean best-match Jaccard | Range |
+|---|---|---|
+| RLM Stability | 0.261 | 0.117 -- 0.516 |
+| HLM Stability | 0.238 | 0.150 -- 0.409 |
+| PAMPA pH 7.4 | 0.252 | 0.111 -- 0.445 |
+
+Even the most overlapping fold pair across replicates shares only ~25%
+of molecules on average. The 5 replicates produce meaningfully different
+partitions, which is why the 5x5 CV provides 25 non-redundant performance
+estimates for statistical testing.
+
 ## Models
 
 Six model variants organized along two axes: architecture (XGBoost vs
