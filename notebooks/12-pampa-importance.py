@@ -546,14 +546,14 @@ def _(
             mo.md("## Combined PAMPA Feature Importance"),
             mo.as_html(_fig),
             mo.md(f"""
-**Left (XGBoost):** Top 6 Morgan fingerprint bits ranked by mean |SHAP|
-on PAMPA test molecules. Each fragment shows the Morgan radius-3
-neighborhood from the test molecule where that bit had the highest SHAP
-contribution. Blue = pushes toward "permeable"; red = "impermeable."
+    **Left (XGBoost):** Top 6 Morgan fingerprint bits ranked by mean |SHAP|
+    on PAMPA test molecules. Each fragment shows the Morgan radius-3
+    neighborhood from the test molecule where that bit had the highest SHAP
+    contribution. Blue = pushes toward "permeable"; red = "impermeable."
 
-**Right (Chemprop):** Top 6 atom types ranked by mean normalized
-gradient saliency across all PAMPA test molecules. Each fragment
-shows the 2-bond neighborhood around the highest-saliency instance of
+    **Right (Chemprop):** Top 6 atom types ranked by mean normalized
+    gradient saliency across all PAMPA test molecules. Each fragment
+    shows the 2-bond neighborhood around the highest-saliency instance of
     that atom type (center atom highlighted in blue). Error bars = SEM.
 
     For PAMPA (passive membrane permeability), we expect important features
