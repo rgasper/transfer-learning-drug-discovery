@@ -440,7 +440,7 @@ def _(
                 _img = _draw_neighborhood(_mol, _center, _rad)
                 if _img is not None:
                     _inset = _ax_xgb_img.inset_axes(
-                        [0.0, _j / _n_xgb, 1.0, 0.9 / _n_xgb],
+                        [0.0, (_n_xgb - 1 - _j) / _n_xgb, 1.0, 0.9 / _n_xgb],
                         transform=_ax_xgb_img.transAxes,
                     )
                     _inset.imshow(_img)
@@ -492,6 +492,8 @@ def _(
     )
     _ax_cp.set_yticks(_y_pos_cp)
     _ax_cp.set_yticklabels(_cp_types, fontsize=9)
+    _ax_cp.yaxis.tick_right()
+    _ax_cp.yaxis.set_label_position("right")
     _ax_cp.set_xlabel("Mean Normalized Saliency", fontsize=11)
     _ax_cp.set_title(
         "Chemprop D-MPNN: Atom-Type Saliency\n(element + aromaticity + degree)",
@@ -514,7 +516,12 @@ def _(
                 _img = _draw_neighborhood(_mol, _atom_idx, 2)
                 if _img is not None:
                     _inset = _ax_cp_img.inset_axes(
-                        [0.0, _j / _n_chemprop, 1.0, 0.9 / _n_chemprop],
+                        [
+                            0.0,
+                            (_n_chemprop - 1 - _j) / _n_chemprop,
+                            1.0,
+                            0.9 / _n_chemprop,
+                        ],
                         transform=_ax_cp_img.transAxes,
                     )
                     _inset.imshow(_img)

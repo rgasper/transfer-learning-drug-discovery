@@ -363,20 +363,26 @@ def _(
         """Extract and draw only the atom neighborhood (not the full molecule).
 
         Uses PathToSubmol to extract the substructure, then highlights the
-        center atom. Falls back to drawing just the center atom if extraction
-        fails.
+        center atom. Ensures at least a 2-bond neighborhood for readability.
 
         Args:
             mol: RDKit Mol object (the full parent molecule).
             center_atom: Index of the central atom.
-            radius: Bond radius of the environment to extract.
+            radius: Bond radius of the environment to extract (min 2 enforced).
             size: Tuple of (width, height) in pixels.
 
         Returns:
             PIL Image of the extracted fragment, or None on failure.
         """
-        if radius == 0:
-            # Just draw the single atom as a SMILES
+        # Enforce minimum radius of 2 for readability
+        _effective_radius = max(radius, 2)
+
+        _env = Chem.FindAtomEnvironmentOfRadiusN(mol, _effective_radius, center_atom)
+        if not _env:
+            # Fallback: try radius 1
+            _env = Chem.FindAtomEnvironmentOfRadiusN(mol, 1, center_atom)
+        if not _env:
+            # Last resort: single atom
             _atom = mol.GetAtomWithIdx(center_atom)
             _smi = f"[{_atom.GetSymbol()}]"
             _frag = Chem.MolFromSmiles(_smi)
@@ -389,24 +395,20 @@ def _(
             _d.FinishDrawing()
             return Image.open(io.BytesIO(_d.GetDrawingText()))
 
-        _env = Chem.FindAtomEnvironmentOfRadiusN(mol, radius, center_atom)
-        if not _env:
-            return None
-
-        # Extract submolecule preserving atom mapping
         _amap = {}
         _submol = Chem.PathToSubmol(mol, _env, atomMap=_amap)
         if _submol is None or _submol.GetNumAtoms() == 0:
             return None
 
-        # Find which atom in the submol corresponds to center_atom
         _center_in_sub = _amap.get(center_atom, -1)
-
-        # Highlight the center atom
-        _highlight_atoms = [_center_in_sub] if _center_in_sub >= 0 else []
-        _atom_colors = (
-            {_center_in_sub: (0.2, 0.6, 1.0, 1.0)} if _center_in_sub >= 0 else {}
-        )
+        _highlight_atoms = list(range(_submol.GetNumAtoms()))
+        # Color all atoms light gray, center atom bright blue
+        _atom_colors = {a: (0.92, 0.92, 0.92, 1.0) for a in _highlight_atoms}
+        if _center_in_sub >= 0:
+            _atom_colors[_center_in_sub] = (0.0, 0.45, 0.9, 1.0)
+        _atom_radii = {a: 0.3 for a in _highlight_atoms}
+        if _center_in_sub >= 0:
+            _atom_radii[_center_in_sub] = 0.5
 
         _d = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
         _opts = _d.drawOptions()
@@ -417,6 +419,7 @@ def _(
             _submol,
             highlightAtoms=_highlight_atoms,
             highlightAtomColors=_atom_colors,
+            highlightAtomRadii=_atom_radii,
         )
         _d.FinishDrawing()
         return Image.open(io.BytesIO(_d.GetDrawingText()))
@@ -426,7 +429,7 @@ def _(
 
     # --- Build figure: 4 columns ---
     _fig = plt.figure(figsize=(22, 12))
-    _gs = _fig.add_gridspec(1, 4, width_ratios=[0.3, 0.7, 0.7, 0.3], wspace=0.05)
+    _gs = _fig.add_gridspec(1, 4, width_ratios=[0.3, 0.7, 0.7, 0.3], wspace=0.08)
 
     # --- XGBoost substructure images (left of bars) ---
     _ax_xgb_img = _fig.add_subplot(_gs[0])
@@ -444,7 +447,7 @@ def _(
                 _img = _draw_neighborhood(_mol, _center, _rad)
                 if _img is not None:
                     _inset = _ax_xgb_img.inset_axes(
-                        [0.0, _j / _n_xgb, 1.0, 0.9 / _n_xgb],
+                        [0.0, (_n_xgb - 1 - _j) / _n_xgb, 1.0, 0.9 / _n_xgb],
                         transform=_ax_xgb_img.transAxes,
                     )
                     _inset.imshow(_img)
@@ -477,6 +480,17 @@ def _(
     )
     _ax_xgb.invert_yaxis()
 
+    # Draw connecting lines between XGB bars and images
+    for _j in range(_n_xgb):
+        _ax_xgb.annotate(
+            "",
+            xy=(0, _j),
+            xytext=(-0.02, _j),
+            xycoords="data",
+            textcoords="data",
+            arrowprops=dict(arrowstyle="-", color="gray", lw=0.5, alpha=0.5),
+        )
+
     # --- Chemprop saliency bars ---
     _ax_cp = _fig.add_subplot(_gs[2])
     _cp_types = chemprop_top_atom_types[:_n_chemprop]
@@ -496,6 +510,8 @@ def _(
     )
     _ax_cp.set_yticks(_y_pos_cp)
     _ax_cp.set_yticklabels(_cp_types, fontsize=9)
+    _ax_cp.yaxis.tick_right()
+    _ax_cp.yaxis.set_label_position("right")
     _ax_cp.set_xlabel("Mean Normalized Saliency", fontsize=11)
     _ax_cp.set_title(
         "Chemprop D-MPNN: Atom-Type Saliency\n(element + aromaticity + degree)",
@@ -515,11 +531,16 @@ def _(
         if _atype in chemprop_atom_type_best:
             _mol, _atom_idx, _sal_val = chemprop_atom_type_best[_atype]
             try:
-                # Draw 2-bond neighborhood centered on the best-saliency atom
-                _img = _draw_neighborhood(_mol, _atom_idx, 2)
+                # Draw 1-bond neighborhood -- keeps fragments small and focused
+                _img = _draw_neighborhood(_mol, _atom_idx, 1)
                 if _img is not None:
                     _inset = _ax_cp_img.inset_axes(
-                        [0.0, _j / _n_chemprop, 1.0, 0.9 / _n_chemprop],
+                        [
+                            0.0,
+                            (_n_chemprop - 1 - _j) / _n_chemprop,
+                            1.0,
+                            0.9 / _n_chemprop,
+                        ],
                         transform=_ax_cp_img.transAxes,
                     )
                     _inset.imshow(_img)
