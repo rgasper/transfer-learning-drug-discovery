@@ -14,6 +14,7 @@ dependencies = [
     "rdkit>=2024.3.1",
     "scikit-learn>=1.5.0",
     "seaborn>=0.13.0",
+    "shap>=0.46.0",
     "statsmodels>=0.14.0",
     "typeguard>=4.0.0",
     "pacmap>=0.7.3",
