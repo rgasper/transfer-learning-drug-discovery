@@ -1,34 +1,121 @@
 # Transfer Learning for Drug Discovery: NCATS ADME
 
+Predicting how a drug candidate behaves in the body -- whether it's
+absorbed, how quickly the liver breaks it down, whether it crosses cell
+membranes -- is central to drug discovery. Machine learning models can
+learn these predictions from experimental data, but the catch is that
+experimental data is expensive and scarce. A typical ADME assay might
+produce a few hundred to a few thousand measurements.
 
+**Transfer learning** offers a tempting shortcut: train a model on a
+large, related dataset first, then adapt it to the smaller target
+dataset. The idea is that the model learns general chemical patterns from
+the source data that carry over to the target. Prior work has shown this
+can improve predictions for drug-like properties (Liu *et al.*, 2022;
+Li & Fourches, 2020; Cai *et al.*, 2020), but a key question has
+received less attention: **what happens when the source and target tasks
+are *not* related?** Does the model gracefully ignore the irrelevant
+pre-training, or does it break?
 
-TODO the openinng paragraph sucks and assumes the reader really knows internals of ml models. the root question we're trying to address here is the counterintuitive and true result that a properly setup transfer-learning on a deep neural net can make a model perform better when it learns data from two different uncorrelated targets. the whole document should be approachable to a non-expert audience; the optneing in particular! add these to references and remark in the relevant discussion sections.     1.Liu, R., Laxminarayan, S., Reifman, J. & Wallqvist, A. Enabling data-limited chemical bioactivity predictions through deep neural network transfer learning. *J Comput Aid Mol Des* **36**, 867–878 (2022).  ,     1.Li, X. & Fourches, D. Inductive transfer learning for molecular activity prediction: Next-Gen QSAR Models with MolPMoFiT. *J Cheminformatics* **12**, 27 (2020).  and     1.Cai, C. *et al.* Transfer Learning for Drug Discovery. *J Med Chem* **63**, 8683–8694 (2020). 
+The answer, it turns out, depends entirely on the model architecture.
+This project demonstrates a counterintuitive result: a graph neural
+network pre-trained on an *unrelated* assay performs just as well as
+one trained from scratch, while a gradient-boosted tree model
+pre-trained on the same unrelated data collapses to random-chance
+performance. The difference is not a matter of tuning or dataset size --
+it's a structural property of how each architecture type handles
+knowledge transfer.
 
-TODO we need a primer (with images or diagrams please!) of the model architectures, and the basic ideas of the mechanics of transfer learning. 
-
-TODO we need a primer of the idea of the difference of what the embedded layers in a neural net learn versus what the final decision layers learn, and how that's different thatn what xgboost does
-
-TODO we don't need to directly link pat walters methodology right at the top. put a references section at the bottom. there's a paper on chemarxiv we can reference not just the blog post
-
-When does pre-training on one biological endpoint help predict another?
-When does it actively hurt? And does the answer depend on whether your model learns *representations* or *decision boundaries*?
-
-This project investigates transfer learning for small-molecule property
-prediction using three NCATS ADME endpoints, comparing architectures that
-differ in where knowledge transfer occurs: XGBoost (transfers at the
-decision boundary), Chemprop D-MPNN (transfers at the representation
-level), and CheMeleon (a D-MPNN foundation model pre-trained on 1M
-compounds). The experimental design follows the statistical methodology
-of Pat Walters'
-[Practical Cheminformatics](https://practicalcheminformatics.blogspot.com/)
-blog: PaCMAP-based chemical space splits, 5x5 replicated cross-validation,
-and Tukey HSD family-wise error control.
+We investigate this using three NCATS ADME endpoints, comparing
+architectures that differ in where knowledge transfer occurs: XGBoost on
+Morgan fingerprints (transfers at the decision boundary), Chemprop D-MPNN
+(transfers at the representation level), and CheMeleon (a D-MPNN
+foundation model pre-trained on 1M compounds). The experimental design
+follows the statistical methodology of Walters (2024a; 2024b; 2025):
+chemical space splits, 5x5 replicated cross-validation, and Tukey HSD
+family-wise error control.
 
 The short version: transfer learning helps everyone when the source and
 target share underlying biochemistry. When they don't, XGBoost
 catastrophically fails while D-MPNN architectures shrug it off. The
 reason is architectural, not hyperparametric, and the SHAP analysis
 makes the mechanism visible at the substructure level.
+
+## How the Models Work (A Primer)
+
+Understanding the results requires a basic grasp of how these two model
+types differ -- not in their math, but in what they *learn* and how that
+learning transfers.
+
+### XGBoost: decisions on fixed features
+
+XGBoost takes a molecule, converts it to a **fixed fingerprint** (a
+2048-bit binary vector where each bit indicates whether a particular
+substructure pattern is present), and builds an ensemble of decision
+trees. Each tree asks a different sequence of yes/no questions about
+which fingerprint bits are on or off, arriving at a prediction for that
+tree. The final answer is the sum of all trees' predictions.
+
+![XGBoost architecture](docs/figures/diagram-xgb-architecture.svg)
+
+*Each tree checks different fingerprint bits and contributes a small
+vote toward "stable" or "unstable." The trees are built sequentially,
+each one correcting the errors of the previous ones. All 50 trees vote
+on every prediction.*
+
+The key property: the fingerprint is computed once, before training, and
+never changes. The model's knowledge lives entirely in the **decision
+trees** -- and every tree, once built, is permanent. Old trees can never
+be removed or modified by subsequent training.
+
+### D-MPNN: learned features, replaceable decisions
+
+The D-MPNN (directed message-passing neural network, implemented by
+Chemprop) takes a molecule as a **graph** -- atoms are nodes, bonds are
+edges -- and learns to extract its own features through a process called
+message passing. Atoms "talk" to their neighbors over several rounds,
+building up a representation that captures the chemical environment of
+each atom. These learned features are pooled into a single molecular
+vector, which is then passed to a small **feed-forward network (FFN
+head)** that makes the final prediction.
+
+![D-MPNN architecture](docs/figures/diagram-dmpnn-architecture.svg)
+
+The key property: the model has two distinct parts. The **encoder**
+(message-passing layers) learns general molecular features -- what
+functional groups are present, how they're connected, what the
+electronic environment looks like. The **FFN head** learns the specific
+mapping from those features to the target property. These parts can be
+separated.
+
+### Why architecture determines transfer safety
+
+When we transfer from a source task to a target task, the two
+architectures do fundamentally different things:
+
+![Transfer comparison](docs/figures/diagram-transfer-comparison.svg)
+
+**XGBoost transfer** continues adding trees on top of the existing
+source-task trees. The old trees stay in the model permanently -- each
+one still contributes to every prediction. If the source task taught the
+model that "substructure X means *unstable*" but the target task needs
+"substructure X means *permeable*", the old trees push in the wrong
+direction and the new trees must fight against them. This is
+**decision-boundary transfer**: the inherited knowledge is the decisions
+themselves, and wrong decisions cannot be unlearned.
+
+**D-MPNN transfer** keeps the encoder (which learned general molecular
+features) but **replaces the FFN head** with a new, randomly initialized
+one. The encoder's features -- atom environments, ring systems,
+functional groups -- are useful for *any* molecular property, even if
+the source and target tasks are unrelated. The new FFN head learns
+from scratch how to map these features to the target property, free from
+any inherited decision bias. This is **representation transfer**: the
+inherited knowledge is a vocabulary of molecular features, not
+task-specific decisions.
+
+This distinction is the central thesis of the project. The experiments
+that follow test it empirically.
 
 ## The Setup
 
@@ -999,8 +1086,14 @@ uv run marimo edit notebooks/15-data-efficiency.py
 
 ## References
 
+- Cai, C. *et al.* Transfer Learning for Drug Discovery. *J Med Chem* **63**, 8683–8694 (2020).
+- Heid, E. *et al.* Chemprop: A Machine Learning Package for Chemical Property Prediction. *J Chem Inf Model* **64**, 9–17 (2024).
+- Li, X. & Fourches, D. Inductive transfer learning for molecular activity prediction: Next-Gen QSAR Models with MolPMoFiT. *J Cheminformatics* **12**, 27 (2020).
+- Liu, R., Laxminarayan, S., Reifman, J. & Wallqvist, A. Enabling data-limited chemical bioactivity predictions through deep neural network transfer learning. *J Comput Aid Mol Des* **36**, 867–878 (2022).
+- Walters, P. Practically significant method comparison protocols for machine learning in drug discovery. *ChemRxiv* (2024). [doi:10.26434/chemrxiv-2024-6dbwv-v2](https://chemrxiv.org/doi/full/10.26434/chemrxiv-2024-6dbwv-v2)
 - Walters, P. [Some Thoughts on Splitting Chemical Datasets](https://practicalcheminformatics.blogspot.com/2024/11/some-thoughts-on-splitting-chemical.html). Practical Cheminformatics, 2024.
 - Walters, P. [Even More Thoughts on ML Method Comparison](https://practicalcheminformatics.blogspot.com/2025/03/even-more-thoughts-on-ml-method.html). Practical Cheminformatics, 2025.
+- Yang, K. *et al.* Analyzing Learned Molecular Representations for Property Prediction. *J Chem Inf Model* **59**, 3370–3388 (2019).
 - Chemprop: [github.com/chemprop/chemprop](https://github.com/chemprop/chemprop)
 - CheMeleon: [github.com/JacksonBurns/chemeleon](https://github.com/JacksonBurns/chemeleon) / [Zenodo](https://zenodo.org/records/15460715)
 - NCATS ADME: [opendata.ncats.nih.gov/adme](https://opendata.ncats.nih.gov/adme)
