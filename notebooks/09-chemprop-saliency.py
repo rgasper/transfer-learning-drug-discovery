@@ -271,23 +271,36 @@ def _(
 
 @app.cell
 def _(Chem, Image, failure_info, io, mo, np, plt, rdMolDraw2D, saliency_data):
-    def draw_saliency_on_mol(mol, atom_saliency, size=(450, 350)):
-        """Draw molecule with atoms colored by saliency.
+    def draw_saliency_diff_on_mol(mol, sal_scratch, sal_transfer, size=(450, 350)):
+        """Draw molecule colored by saliency difference (transfer - scratch).
 
-        Uses a power-law mapping (gamma=3) so only the most important
-        atoms stand out strongly. Low-saliency atoms are nearly transparent.
+        Green = transfer pays more attention than scratch.
+        Red = scratch pays more attention than transfer.
+        Uses power-law mapping (gamma=2) on the absolute difference
+        to emphasize the largest disagreements.
         """
-        _sal = np.array(atom_saliency)
-        _max_sal = _sal.max() if _sal.max() > 0 else 1.0
-        _norm = _sal / _max_sal
-        # Power-law: gamma=3 compresses low values, emphasizes high
-        _nonlinear = _norm**3
+        _sal_s = np.array(sal_scratch)
+        _sal_t = np.array(sal_transfer)
+        # Normalize each to [0,1] before taking difference
+        _max_s = _sal_s.max() if _sal_s.max() > 0 else 1.0
+        _max_t = _sal_t.max() if _sal_t.max() > 0 else 1.0
+        _diff = (_sal_t / _max_t) - (_sal_s / _max_s)  # range [-1, 1]
+
+        _max_abs = max(np.abs(_diff).max(), 1e-8)
+        _norm_diff = _diff / _max_abs  # normalize to [-1, 1]
 
         _atoms = list(range(mol.GetNumAtoms()))
         _atom_colors = {}
         for _a in _atoms:
-            _v = float(_nonlinear[_a])
-            _atom_colors[_a] = (0.13, 0.59, 0.95, _v * 0.85 + 0.05)
+            _v = float(_norm_diff[_a])
+            # Power-law on absolute value to emphasize extremes
+            _intensity = float(abs(_v) ** 2 * 0.8 + 0.1)
+            if _v > 0:
+                # Green: transfer > scratch
+                _atom_colors[_a] = (0.2, 0.8, 0.3, _intensity)
+            else:
+                # Red: scratch > transfer
+                _atom_colors[_a] = (1.0, 0.3, 0.2, _intensity)
 
         _bonds = list(range(mol.GetNumBonds()))
         _bond_colors = {}
@@ -295,8 +308,12 @@ def _(Chem, Image, failure_info, io, mo, np, plt, rdMolDraw2D, saliency_data):
             _bond = mol.GetBondWithIdx(_b)
             _a1 = _bond.GetBeginAtomIdx()
             _a2 = _bond.GetEndAtomIdx()
-            _avg = float((_nonlinear[_a1] + _nonlinear[_a2]) / 2)
-            _bond_colors[_b] = (0.13, 0.59, 0.95, _avg * 0.85 + 0.05)
+            _avg_v = float((_norm_diff[_a1] + _norm_diff[_a2]) / 2)
+            _intensity = float(abs(_avg_v) ** 2 * 0.8 + 0.1)
+            if _avg_v > 0:
+                _bond_colors[_b] = (0.2, 0.8, 0.3, _intensity)
+            else:
+                _bond_colors[_b] = (1.0, 0.3, 0.2, _intensity)
 
         _d = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
         _d.DrawMolecule(
@@ -318,21 +335,17 @@ def _(Chem, Image, failure_info, io, mo, np, plt, rdMolDraw2D, saliency_data):
         _row = failure_info.row(_rank, named=True)
         _label = "Permeable" if _row["true_label"] == 1 else "Impermeable"
 
-        _img_s = draw_saliency_on_mol(_mol, _data["saliency_scratch"])
-        _img_t = draw_saliency_on_mol(_mol, _data["saliency_transfer"])
-
-        _fig, (_ax1, _ax2) = plt.subplots(1, 2, figsize=(14, 5))
-        _ax1.imshow(_img_s)
-        _ax1.set_title(
-            f"Chemprop Scratch\nP(active)={_data['pred_scratch']:.3f}", fontsize=11
+        _img_diff = draw_saliency_diff_on_mol(
+            _mol, _data["saliency_scratch"], _data["saliency_transfer"]
         )
-        _ax1.axis("off")
-        _ax2.imshow(_img_t)
-        _ax2.set_title(
-            f"Chemprop RLM-Transfer\nP(active)={_data['pred_transfer']:.3f}",
+
+        _fig, _ax = plt.subplots(1, 1, figsize=(8, 6))
+        _ax.imshow(_img_diff)
+        _ax.set_title(
+            f"P(scratch)={_data['pred_scratch']:.3f}  |  P(transfer)={_data['pred_transfer']:.3f}",
             fontsize=11,
         )
-        _ax2.axis("off")
+        _ax.axis("off")
 
         _fig.suptitle(
             f"Molecule #{_rank + 1}: True={_label} | {_smi[:60]}{'...' if len(_smi) > 60 else ''}",
@@ -344,13 +357,13 @@ def _(Chem, Image, failure_info, io, mo, np, plt, rdMolDraw2D, saliency_data):
 
     mo.vstack(
         [
-            mo.md("## Chemprop Atom Saliency: Failure Molecules"),
+            mo.md("## Chemprop Saliency Difference: Transfer - Scratch"),
             mo.md("""
-Per-atom gradient saliency for the same 5 PAMPA failure molecules.
-Darker blue = higher gradient magnitude = more important for the
-model's prediction. Uses a power-law color mapping (gamma=3) so only
-the most important atoms stand out. The scratch model (left) and
-transfer model (right) may focus on different parts of the molecule.
+Per-atom saliency difference (transfer minus scratch, after normalizing
+each model's saliency to [0,1]). **Green** = transfer model pays more
+attention to this atom than scratch. **Red** = scratch pays more attention.
+Intensity scales with the squared magnitude of the difference, so only
+the largest disagreements stand out.
         """),
             *_outputs,
         ]
