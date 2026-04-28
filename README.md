@@ -17,6 +17,30 @@ Three NCATS ADME endpoints curated from PubChem BioAssay (public subsets):
 | HLM Stability | Related finetune target | 900 | 542 (stable) | 358 (unstable) | 60% / 40% |
 | PAMPA pH 7.4 | Unrelated finetune target | 2,033 | 1,738 (permeable) | 295 (impermeable) | 86% / 14% |
 
+**RLM and HLM Stability** both measure microsomal metabolic stability --
+the rate at which liver microsome enzymes (predominantly CYP450s) break
+down a compound. RLM uses rat liver microsomes, HLM uses human. Although
+the specific CYP isoform profiles differ between species, the underlying
+biochemistry is the same: compounds with metabolically labile functional
+groups (e.g., unprotected amines, benzylic positions, electron-rich
+aromatics) tend to be unstable in both species. This shared
+structure-activity relationship is why we hypothesize RLM->HLM transfer
+should work even though the two datasets share only 5.6% of molecules
+and 12.9% of scaffolds -- the *structural rules* governing stability are
+conserved across species, even when the specific compounds tested are
+different.
+
+**PAMPA pH 7.4** measures passive membrane permeability via an artificial
+phospholipid membrane. This is a fundamentally different physical process
+from enzymatic metabolism: permeability depends on lipophilicity,
+molecular size, hydrogen bond donor/acceptor count, and conformational
+flexibility, whereas metabolic stability depends on the presence of
+specific metabolically vulnerable functional groups and CYP binding
+affinity. A compound can be highly permeable but metabolically unstable
+(or vice versa), which is why we hypothesize RLM->PAMPA transfer should
+provide minimal benefit -- the structural features that predict one
+property are largely orthogonal to those that predict the other.
+
 ![Class balance](docs/figures/eda-class-balance.png)
 
 ### Molecule Overlap
