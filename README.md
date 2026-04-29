@@ -1,123 +1,54 @@
 # Transfer Learning for Drug Discovery: NCATS ADME
 
-Predicting how a drug candidate behaves in the body -- whether it's
-absorbed, how quickly the liver breaks it down, whether it crosses cell
-membranes -- is central to drug discovery. Machine learning models can
-learn these predictions from experimental data, but the catch is that
-experimental data is expensive and scarce. A typical ADME assay might
-produce a few hundred to a few thousand measurements.
+This document explores a practical question: does transfer learning help for ADME prediction (yes), and does it matter what kind of model you use (yes), and why?
 
-**Transfer learning** offers a tempting shortcut: train a model on a
-large, related dataset first, then adapt it to the smaller target
-dataset. The idea is that the model learns general chemical patterns from
-the source data that carry over to the target. Prior work has shown this
-can improve predictions for drug-like properties (Liu *et al.*, 2022;
-Li & Fourches, 2020; Cai *et al.*, 2020), but a key question has
-received less attention: **what happens when the source and target tasks
-are *not* related?** Does the model gracefully ignore the irrelevant
-pre-training, or does it break?
+Predicting how a drug candidate behaves in the body -- whether it's absorbed, how quickly the liver breaks it down, whether it crosses cell membranes -- is central to drug discovery. Machine learning models can learn these predictions from experimental data, but experimental data is expensive and scarce. A typical ADME assay might produce a few hundred to a few thousand measurements.
 
-The answer, it turns out, depends entirely on the model architecture.
-This project demonstrates a counterintuitive result: a graph neural
-network pre-trained on an *unrelated* assay performs just as well as
-one trained from scratch, while a gradient-boosted tree model
-pre-trained on the same unrelated data collapses to random-chance
-performance. The difference is not a matter of tuning or dataset size --
-it's a structural property of how each architecture type handles
-knowledge transfer.
+Transfer learning is a common technique: train a model on a large dataset first, then adapt it to a smaller target dataset. The idea is that the model picks up general chemical patterns from the source data that carry over to the target. This is well-established in the literature <sup>[1][2][3]</sup>. But the practical question that comes up when you're actually building these pipelines is: **what happens when you pick a source dataset that turns out to be unrelated to your target?** Does the model gracefully ignore the irrelevant pre-training, or does it break?
 
-We investigate this using three NCATS ADME endpoints, comparing
-architectures that differ in where knowledge transfer occurs: XGBoost on
-Morgan fingerprints (transfers at the decision boundary), Chemprop D-MPNN
-(transfers at the representation level), and CheMeleon (a D-MPNN
-foundation model pre-trained on 1M compounds). The experimental design
-follows the statistical methodology of Walters (2024a; 2024b; 2025):
-chemical space splits, 5x5 replicated cross-validation, and Tukey HSD
-family-wise error control.
+The answer to that question depends on the model architecture you're using, and the failure mode of picking the wrong model architecture can be dramatic. In these experiments, we'll demonstrate a graph neural network pre-trained on an unrelated assay performs just as well as one trained from scratch -- it simply ignores the irrelevant pre-training (we'll also discuss why one would do that). A gradient-boosted tree model pre-trained on the same unrelated data collapses to be as bad simple random-chance, effectively erasing all learnings! The difference is structural: it comes from how each architecture type handles knowledge transfer, not from tuning or dataset size.
 
-The short version: transfer learning helps everyone when the source and
-target share underlying biochemistry. When they don't, XGBoost
-catastrophically fails while D-MPNN architectures shrug it off. The
-reason is architectural, not hyperparametric, and the SHAP analysis
-makes the mechanism visible at the substructure level.
+The experiments use three NCATS ADME endpoints and compare architectures that differ in where knowledge transfer occurs: XGBoost on Morgan fingerprints, a small Chemprop D-MPNN, and CheMeleon (a larger D-MPNN foundation model pre-trained on 1M compounds). The statistical methodology follows Walters <sup>[4][5][6]</sup>: chemical space splits, 5x5 replicated cross-validation, and Tukey HSD family-wise error control.
+
+The short version: transfer learning helps everyone when the source and target share underlying biochemistry. When they don't, XGBoost catastrophically fails while D-MPNN architectures shrug it off. The reason is architectural, not hyperparametric, and the SHAP analysis makes the mechanism visible at the substructure level.
 
 ## How the Models Work (A Primer)
 
-Understanding the results requires a basic grasp of how these two model
-types differ -- not in their math, but in what they *learn* and how that
-learning transfers.
+Understanding the results requires a basic grasp of how these two model types differ -- not in their math, but in what they *learn* and how that learning transfers.
 
 ### XGBoost: decisions on fixed features
 
-XGBoost takes a molecule, converts it to a **fixed fingerprint** (a
-2048-bit binary vector where each bit indicates whether a particular
-substructure pattern is present), and builds an ensemble of decision
-trees. Each tree asks a different sequence of yes/no questions about
-which fingerprint bits are on or off, arriving at a prediction for that
-tree. The final answer is the sum of all trees' predictions.
+XGBoost takes a molecule, converts it to a fixed fingerprint (in this case, a 2048-bit binary vector where each bit indicates whether a particular substructure pattern is present), and builds an ensemble of decision trees. Each tree asks a different sequence of yes/no questions about which fingerprint bits are on or off, arriving at a prediction for that tree. The final answer is the sum of all trees' predictions.
 
 ![XGBoost architecture](docs/figures/diagram-xgb-architecture.svg)
 
-*Each tree checks different fingerprint bits and contributes a small
-vote toward "stable" or "unstable." The trees are built sequentially,
-each one correcting the errors of the previous ones. All 50 trees vote
-on every prediction.*
+*Each tree checks different fingerprint bits and contributes a small vote toward "stable" or "unstable." The trees are built sequentially, each one correcting the errors of the previous ones. All 50 trees vote on every prediction.*
 
-The key property: the fingerprint is computed once, before training, and
-never changes. The model's knowledge lives entirely in the **decision
-trees** -- and every tree, once built, is permanent. Old trees can never
-be removed or modified by subsequent training.
+The key property: the fingerprint is computed once, before training, and never changes. The model's knowledge lives entirely in the decision trees -- and every tree, once built, is permanent. Old trees can never be removed or modified by subsequent training.
 
 ### D-MPNN: learned features, replaceable decisions
 
-The D-MPNN (directed message-passing neural network, implemented by
-Chemprop) takes a molecule as a **graph** -- atoms are nodes, bonds are
-edges -- and learns to extract its own features through a process called
-message passing. Atoms "talk" to their neighbors over several rounds,
-building up a representation that captures the chemical environment of
-each atom. These learned features are pooled into a single molecular
-vector, which is then passed to a small **feed-forward network (FFN
-head)** that makes the final prediction.
+The D-MPNN (directed message-passing neural network, implemented by Chemprop) takes a molecule as a graph -- atoms are nodes, bonds are edges -- and learns to extract its own features through a process called message passing. Atoms "talk" to their neighbors over several rounds, building up a representation that captures the chemical environment of each atom. These learned features are pooled into a single molecular vector - essentially a custom fingerprint, which is then passed to a small feed-forward network (FFN head) that makes the final prediction.
 
 ![D-MPNN architecture](docs/figures/diagram-dmpnn-architecture.svg)
 
-The key property: the model has two distinct parts. The **encoder**
-(message-passing layers) learns general molecular features -- what
-functional groups are present, how they're connected, what the
-electronic environment looks like. The **FFN head** learns the specific
-mapping from those features to the target property. These parts can be
-separated.
+The key property: the model has two distinct parts. The encoder (message-passing layers) learns general molecular features -- what functional groups are present, how they're connected, what the electronic environment looks like. The FFN head learns the specific mapping from those features to the target property. These parts can be separated.
 
 ### Why architecture determines transfer safety
 
-When we transfer from a source task to a target task, the two
-architectures do fundamentally different things:
+When we transfer from a source task to a target task, the two architectures do fundamentally different things:
 
 ![Transfer comparison](docs/figures/diagram-transfer-comparison.svg)
 
-**XGBoost transfer** continues adding trees on top of the existing
-source-task trees. The old trees stay in the model permanently -- each
-one still contributes to every prediction. If the source task taught the
-model that "substructure X means *unstable*" but the target task needs
-"substructure X means *permeable*", the old trees push in the wrong
-direction and the new trees must fight against them. This is
-**decision-boundary transfer**: the inherited knowledge is the decisions
-themselves, and wrong decisions cannot be unlearned.
+XGBoost transfer continues adding trees on top of the existing source-task trees. The old trees stay in the model permanently -- each one still contributes to every prediction. If the source task taught the model that "substructure X means *unstable*" but the target task needs "substructure X means *permeable*", the old trees push in the wrong direction and the new trees must fight against them. This is "decision-boundary transfer": the inherited knowledge is the decisions themselves, and wrong decisions cannot be unlearned.
 
-**D-MPNN transfer** keeps the encoder (which learned general molecular
-features) but **replaces the FFN head** with a new, randomly initialized
-one. The encoder's features -- atom environments, ring systems,
-functional groups -- are useful for *any* molecular property, even if
-the source and target tasks are unrelated. The new FFN head learns
-from scratch how to map these features to the target property, free from
-any inherited decision bias. This is **representation transfer**: the
-inherited knowledge is a vocabulary of molecular features, not
-task-specific decisions.
+D-MPNN transfer keeps the encoder, which learned general molecular features, but replaces the FFN head with a new, randomly initialized one. The encoder's features -- atom environments, ring systems, functional groups it identified from the molecular graph -- could be useful for *any* molecular property, even if the source and target tasks are unrelated. The new FFN head learns from scratch how to map these features to the target property, free from any inherited decision bias. This is "representation transfer": the inherited knowledge is a vocabulary of molecular features expressed in the vector that comes out of the pooling layer, not task-specific decisions.
 
-This distinction is the central thesis of the project. The experiments
-that follow test it empirically.
+This distinction is the central thesis of the project. The experiments that follow test it empirically.
 
 ## The Setup
+
+The experiments use three ADME (Absorption, Distribution, Metabolism, Excretion) endpoints from the NCATS public dataset. **RLM** and **HLM** stand for Rat Liver Microsomal stability and Human Liver Microsomal stability -- both measure how quickly liver enzymes break down a compound, just in different species. **PAMPA** (Parallel Artificial Membrane Permeability Assay) measures whether a compound can passively cross a cell membrane. RLM and HLM are mechanistically related; PAMPA measures something completely different.
 
 Three NCATS ADME endpoints curated from PubChem BioAssay (public subsets):
 
@@ -127,7 +58,7 @@ Three NCATS ADME endpoints curated from PubChem BioAssay (public subsets):
 | HLM Stability | Related finetune target | 900 | 542 (stable) | 358 (unstable) | 60% / 40% |
 | PAMPA pH 7.4 | Unrelated finetune target | 2,033 | 1,738 (permeable) | 295 (impermeable) | 86% / 14% |
 
-Three architectures, each tested with and without RLM pre-training:
+Three model architectures, each tested with and without RLM pre-training:
 
 - **XGBoost** on 2048-bit Morgan fingerprints (radius 3). ~3K effective
   parameters (50 trees after early stopping, max depth 6). Transfer means
@@ -138,19 +69,7 @@ Three architectures, each tested with and without RLM pre-training:
   on 1M PubChem compounds. Tested with full finetuning and with the
   encoder frozen (615K trainable parameters).
 
-**No hyperparameter tuning was performed.** All models use default or
-near-default configurations. Chemprop uses library defaults throughout
-(d_h=300, depth=3, 1-layer FFN, no dropout, no batch norm, 30 epochs,
-batch size 64). XGBoost uses defaults except for a lower learning rate
-(0.1 vs default 0.3) and regularizing subsampling (subsample=0.8,
-colsample_bytree=0.8), with 200 boosting rounds and early stopping at
-20 rounds patience. CheMeleon inherits its encoder architecture from the
-foundation model weights and uses the same FFN/training configuration as
-Chemprop. This is deliberate: the comparison is between architectures and
-transfer strategies, not between tuning budgets. Any model could likely
-improve with hyperparameter search, but the relative rankings and
-especially the transfer failure modes are structural properties of the
-architectures, not artifacts of under-tuning.
+No hyperparameter tuning was performed. All models use default or near-default configurations. Chemprop uses library defaults throughout (d_h=300, depth=3, 1-layer FFN, no dropout, no batch norm, 30 epochs, batch size 64). XGBoost uses common practitioner defaults: learning rate 0.1, subsample=0.8, colsample_bytree=0.8, 200 boosting rounds, early stopping at 20 rounds patience -- standard "mildly regularized" settings, not tuned for these datasets. CheMeleon inherits its encoder architecture from the foundation model weights and uses the same FFN & training configuration as Chemprop. This is deliberate: the comparison is between architectures and transfer strategies, not between tuning budgets. Any of these models could likely improve with a hyperparameter search, but the relative rankings and especially the transfer failure modes are structural properties of the architectures, not artifacts of under-tuning.
 
 The two transfer targets test a clear hypothesis:
 
@@ -162,37 +81,21 @@ The two transfer targets test a clear hypothesis:
 
 ### Validating the starting point
 
-For the transfer comparison to be interpretable, we need to understand
-how well each architecture learns the RLM source task. We evaluated all
-three base architectures on RLM using the same 5x5 CV protocol:
+For the transfer comparison to be interpretable, we need to understand how well each architecture learns the RLM source task. We evaluated all three base architectures on RLM using the same 5x5 CV protocol:
 
 ![RLM base model comparison](docs/figures/rlm-base-comparison.png)
 
-*Left: AUC-PR distributions for each architecture on RLM (5x5 CV, 25
-folds). Dotted line = random baseline (0.298). Right: Tukey HSD (FWER =
-0.05). XGBoost (red) is significantly worse than the D-MPNN reference.*
+*Left: AUC-PR distributions for each architecture on RLM (5x5 CV, 25 folds). Dotted line = random baseline (0.298). Right: Tukey HSD (FWER = 0.05). XGBoost (red) is significantly worse than the D-MPNN reference.*
 
-XGBoost on Morgan fingerprints underperforms both D-MPNN architectures
-on RLM (Tukey HSD, FWER = 0.05) and shows substantially higher variance
-across folds. Chemprop and CheMeleon are statistically indistinguishable
-from each other and produce tighter, more stable estimates. Keep this
-asymmetry in mind for the transfer results that follow -- the XGBoost
-source model is the weakest of the three, which constrains how we
-interpret both its successes and its failures after transfer.
+XGBoost on Morgan fingerprints underperforms both D-MPNN architectures on RLM (Tukey HSD, FWER = 0.05) and shows substantially higher variance across folds. Chemprop and CheMeleon are statistically indistinguishable from each other and produce tighter, more stable estimates across the structurally varied folds and repeats. Keep this asymmetry in mind for the transfer results that follow -- the XGBoost source model is the weakest of the three, which constrains how we interpret both its successes and its failures after transfer.
 
 ---
 
-## Story 1: When Transfer Helps (RLM -> HLM)
+## Story 1: When Transfer Learning Always Helps (RLM -> HLM)
 
 ### Why we expect it to work
 
-RLM and HLM Stability both measure the rate at which liver microsome
-enzymes (predominantly CYP450s) break down a compound. RLM uses rat
-liver microsomes, HLM uses human. Although the specific CYP isoform
-profiles differ between species, the underlying biochemistry is the same:
-compounds with metabolically labile functional groups (e.g., unprotected
-amines, benzylic positions, electron-rich aromatics) tend to be unstable
-in both species.
+RLM and HLM Stability both measure the rate at which liver microsome enzymes (predominantly CYP450s) break down a compound. RLM uses rat liver microsomes, HLM uses human. Although the specific CYP isoform profiles differ between species, the underlying biochemistry is the same: compounds with metabolically labile functional groups (e.g., unprotected amines, benzylic positions, electron-rich aromatics) tend to be unstable in both species.
 
 The datasets share only 5.6% of molecules and 12.9% of scaffolds:
 
@@ -200,51 +103,34 @@ The datasets share only 5.6% of molecules and 12.9% of scaffolds:
 |---|---|---|---|---|
 | RLM ∩ HLM | 50 | 5.6% | 94 | 12.9% |
 
-This minimal overlap is the point. If transfer helps despite sharing
-almost no compounds, the models must be learning *structural rules*
-governing metabolic stability -- not memorizing specific molecules from
-the source dataset.
+This minimal overlap in the chemical matter means that if transfer helps, the models must be learning *structural rules* governing metabolic stability -- not memorizing specific molecules from the source dataset.
 
 ### Results across all architectures
 
-Eight model variants, spanning the three architectures with and without
-RLM pre-training:
+Eight model variants, spanning the three architectures with and without RLM pre-training:
 
 | Model | Architecture | Transfer Strategy | AUC-PR (mean +/- std) | Best group |
 |---|---|---|---|---|
 | XGBoost scratch | Gradient-boosted trees (~3K) | None (Morgan FP) | 0.739 +/- 0.048 | |
 | XGBoost RLM-transfer | Gradient-boosted trees (~3K) | Continue boosting from RLM | 0.789 +/- 0.049 | |
-| CheMeleon single-finetune | D-MPNN foundation (9.3M) | Foundation -> HLM (all weights) | 0.790 +/- 0.044 | |
 | Chemprop scratch | D-MPNN (318K) | None | 0.793 +/- 0.037 | |
-| CheMeleon double-finetune | D-MPNN foundation (9.3M) | Foundation -> RLM -> HLM (all weights) | 0.806 +/- 0.032 | * |
-| CheMeleon frozen double | D-MPNN foundation (615K trainable) | Foundation -> RLM -> HLM (FFN only) | 0.819 +/- 0.034 | * |
-| CheMeleon frozen single | D-MPNN foundation (615K trainable) | Foundation -> HLM (FFN only) | 0.819 +/- 0.035 | * |
 | **Chemprop RLM-transfer** | **D-MPNN (318K)** | **Pre-train on RLM, new FFN head** | **0.831 +/- 0.035** | **\*** |
+| CheMeleon single-finetune | D-MPNN foundation (9.3M) | Foundation -> HLM (all weights) | 0.790 +/- 0.044 | |
+| CheMeleon double-finetune | D-MPNN foundation (9.3M) | Foundation -> RLM -> HLM (all weights) | 0.806 +/- 0.032 | * |
+| CheMeleon frozen single | D-MPNN foundation (615K trainable) | Foundation -> HLM (FFN only) | 0.819 +/- 0.035 | * |
+| CheMeleon frozen double | D-MPNN foundation (615K trainable) | Foundation -> RLM -> HLM (FFN only) | 0.819 +/- 0.034 | * |
 
-\* Not statistically significantly different from the best model (Tukey
-HSD, FWER = 0.05).
+\* Not statistically significantly different from the best model (Tukey HSD, FWER = 0.05).
 
 ![HLM boxplots](docs/figures/boxplots-hlm-auc-pr.png)
 
-*AUC-PR distributions across 25 CV folds. Dotted line = random baseline
-(positive class prevalence, 0.602). Box = IQR, whiskers = 1.5x IQR.*
+*AUC-PR distributions across 25 CV folds. Dotted line = random baseline (positive class prevalence, 0.602). Box = IQR, whiskers = 1.5x IQR.*
 
 ![Tukey HSD HLM](docs/figures/tukey-hsd-hlm-auc-pr.png)
 
-*Tukey HSD simultaneous confidence intervals (FWER = 0.05). Reference =
-best mean. Red = significantly worse than reference. Gray = not
-significantly different.*
+*Tukey HSD simultaneous confidence intervals (FWER = 0.05). Reference = best mean. Red = significantly worse than reference. Gray = not significantly different.*
 
-Transfer helps *every* architecture. Comparing each transfer variant to
-its own scratch baseline: XGBoost gains +0.049 (0.739 -> 0.789),
-Chemprop gains +0.038 (0.793 -> 0.831), and CheMeleon gains +0.016
-(single-finetune 0.790 -> double-finetune 0.806). The Chemprop
-improvement is statistically significant (p = 0.022, Tukey HSD). The
-XGBoost improvement is particularly notable given that XGBoost learned
-the RLM source task significantly worse than the D-MPNN architectures
-(see [Validating the starting point](#validating-the-starting-point)) --
-even a weaker source model transfers useful knowledge when the source
-and target share underlying biochemistry.
+Transfer helps *every* architecture. Comparing each transfer variant to its own scratch baseline: XGBoost gains +0.049 (0.739 -> 0.789), Chemprop gains +0.038 (0.793 -> 0.831), and CheMeleon gains +0.016 (single-finetune 0.790 -> double-finetune 0.806). The Chemprop improvement is statistically significant (p = 0.022, Tukey HSD). The XGBoost improvement is particularly notable given that XGBoost learned the RLM source task significantly worse than the D-MPNN architectures (see [Validating the starting point](#validating-the-starting-point)) -- even a weaker source model transfers useful knowledge when the source and target share underlying biochemistry. However, note that the transfer-learned XGBoost models exhibit the highest variance of any model class by far.
 
 Key pairwise comparisons (Tukey HSD, FWER = 0.05):
 
@@ -257,350 +143,128 @@ Key pairwise comparisons (Tukey HSD, FWER = 0.05):
 
 ### What the models learn: shared structural rules
 
-The RLM vs HLM correlation on their 27 shared uncensored compounds is
-weak (Pearson r=0.54 on n=27), suggesting the transfer benefit does not
-come from information about specific shared compounds. Rather, the models
-learn which *types* of substructures make a molecule metabolically
-vulnerable -- knowledge that transfers across species because the
-underlying enzymatic chemistry is conserved.
+The RLM vs HLM correlation on their 27 shared uncensored compounds is weak (Pearson r=0.54 on n=27), suggesting the transfer benefit does not come from information about specific shared compounds. Rather, the models learn which *types* of substructures make a molecule metabolically vulnerable -- knowledge that transfers across species because the underlying enzymatic chemistry is conserved.
 
 ![RLM vs HLM correlation](docs/figures/eda-correlation-rlm-hlm.png)
 
-*Scatter of continuous endpoint values for the 27 compounds shared
-between RLM and HLM (uncensored in both). Weak correlation (r=0.54)
-despite shared biochemistry -- transfer benefit comes from structural
-rules, not shared data points.*
+*Scatter of continuous endpoint values for the 27 compounds shared between RLM and HLM (uncensored in both). Weak correlation (r=0.54) despite shared biochemistry -- transfer benefit comes from structural rules, not shared data points.*
 
-To make this concrete, we computed feature importance for both
-architectures on HLM and compared how they shift with transfer:
+To better understand what the models learned against the RLM and HLM targets, we computed feature importance for both architectures and compared how they shift with transfer:
 
 ![HLM XGBoost scratch vs transfer](docs/figures/hlm-xgb-scratch-vs-transfer.png)
 
-*XGBoost: top 6 SHAP features before and after RLM transfer. Single
-fold; rankings may vary with different test sets.*
+*XGBoost: top 6 SHAP features before and after RLM transfer. Single fold; rankings may vary with different test sets.*
 
-The scratch and transfer models share 3 of their top 6 bits (1171, 1722,
-1088), all pushing toward "stable" (blue). These correspond to
-alkyl/alkenyl carbon environments -- saturated or low-electron-density
-fragments that lack CYP-vulnerable soft spots. The transfer model
-promotes Bit 1088 from #4 to #1, more than doubling its SHAP magnitude.
-This bit's substructure (a branched alkenyl chain with sulfur) is a
-metabolic stability motif that the RLM pre-training made the model more
-confident about. Bit 1199 flips from blue (scratch) to red (transfer) --
-the transfer model learned from RLM that this fragment correlates with
-instability, and this association carried over to HLM where it's also
-correct. The overall pattern: RLM transfer amplifies and refines existing
-metabolic-stability features rather than introducing alien ones, which
-is exactly why it helps.
+The scratch and transfer models share 3 of their top 6 bits (1171, 1722, 1088), all pushing toward "stable" (blue). These correspond to alkyl/alkenyl carbon environments -- saturated or low-electron-density fragments that lack CYP-vulnerable soft spots. The RLM pre-training promotes Bit 1088 from #4 to #1, more than doubling its SHAP magnitude -- this bit's substructure (a branched alkenyl chain with sulfur) is a metabolic stability enhancing group which clearly carried over as important in determining both RLM and HLM stability. Note that while bits 1171 and 1722 drop in the ranking, their absolute SHAP values remain similar -- meaning they're likely features relevant only to the HLM chemical domain, not amplified by the RLM pre-training. The transfer model also introduces new high-importance features (bits 1199, 145, 1028, 378) that weren't in the scratch top-6. These are features the model learned from RLM data and brought to the HLM task, and their presence correlates with the improved HLM performance. The overall pattern: RLM transfer both amplifies shared metabolic-stability features and introduces new ones learned from the larger source dataset.
 
 ![HLM Chemprop scratch vs transfer](docs/figures/hlm-chemprop-scratch-vs-transfer.png)
 
-*Chemprop: top 6 atom types by saliency before and after RLM transfer.
-Single fold; rankings may vary with different test sets.*
+*Chemprop: top 6 atom types by saliency before and after RLM transfer. Single fold; rankings may vary with different test sets.*
 
-The Chemprop panels show substantial overlap in atom types (N deg1, N
-deg2, N deg3, P deg4 all appear in both) but with a notable shift: the
-transfer model elevates sulfur environments (S deg3, S deg1) to top
-positions. This is chemically sensible -- thioethers and sulfonamides are
-known CYP substrates and their metabolic lability transfers across
-species. The scratch model focuses more narrowly on nitrogen
-environments; the transfer model broadens attention to include
-sulfur-containing motifs that RLM pre-training surfaced. Both models
-ignore aromatic carbons (which are metabolically inert unless activated),
-confirming they learn genuine SAR rather than dataset artifacts.
+The Chemprop panels show substantial overlap in atom types (N deg1, N deg2, N deg3, P deg4 all appear in both) but with a notable shift: the pre-training on RLM stability elevates sulfur environments (S deg3, S deg1) to top positions. This is chemically sensible -- thioethers and sulfonamides are known CYP substrates and their metabolic lability transfers across species. So the model was able to learn these unique features from the RLM dataset which did not exist in sufficient number to produce a meaningful statistical signal in the HLM target dataset, and still leverage them without losing accuracy. The scratch model focuses narrowly on the impacts of nitrogen groups -- likely an artifact of the limited chemical matter available to learn from; the transfer model broadens attention to include sulfur-containing motifs that RLM pre-training surfaced. Note again that some groups such as "N deg2" change in ranking due to pre-training but appear with consistent magnitude with or without RLM pre-training; likely an artifact of this chemical group correlating a lot with HLM stability, but not much with RLM stability.
 
 ---
 
-## Story 2: When Transfer Hurts (RLM -> PAMPA)
+## Story 2: When Transfer Learning Can Hurt (RLM -> PAMPA)
 
 ### Why we expect it to fail
 
-PAMPA pH 7.4 measures passive membrane permeability via an artificial
-phospholipid membrane. This is a fundamentally different physical process
-from enzymatic metabolism: permeability depends on lipophilicity,
-molecular size, hydrogen bond donor/acceptor count, and conformational
-flexibility. Metabolic stability depends on the presence of specific
-metabolically vulnerable functional groups and CYP binding affinity.
+PAMPA pH 7.4 measures passive membrane permeability via an artificial phospholipid membrane. This is a fundamentally different physical process from enzymatic metabolism: permeability depends on lipophilicity, molecular size, hydrogen bond donor/acceptor count, and conformational flexibility. Metabolic stability however depends on the presence of specific metabolically vulnerable functional groups and CYP binding affinity. A compound can be highly permeable but metabolically unstable (or vice versa). The structural features that predict one property are largely orthogonal to those that predict the other. There's no correlation between RLM half-life and PAMPA permeability -- these are clearly mechanistically distinct endpoints.
 
-A compound can be highly permeable but metabolically unstable (or vice
-versa). The structural features that predict one property are largely
-orthogonal to those that predict the other.
 
-RLM and PAMPA share 99.5% of molecules (same compound library), making
-this a strong test: any benefit from transfer must come from
-representation learning, not exposure to new chemical matter. And any
-harm must come from *wrong* learned associations being inherited.
-
-| Pair | Shared Molecules | % of Smaller Set | Shared Scaffolds | % of Smaller Set |
-|---|---|---|---|---|
-| RLM ∩ PAMPA | 2,023 | 99.5% | 1,385 | 99.6% |
 
 ![RLM vs PAMPA correlation](docs/figures/eda-correlation-rlm-pampa.png)
 
-*Scatter of continuous endpoint values for the 985 compounds shared
-between RLM and PAMPA (uncensored in both). No correlation -- these
-endpoints measure fundamentally different physical processes.*
+*Scatter of continuous endpoint values for the 985 compounds shared between RLM and PAMPA (uncensored in both). No correlation -- these endpoints measure fundamentally different physical processes.*
 
-No correlation between RLM half-life and PAMPA permeability --
-mechanistically distinct endpoints.
+While the target variables are highly uncorrelated, RLM and PAMPA share 99.5% of molecules (same compound library), making this a strong test: any benefit from transfer must come from representation learning - building an effective understanding of chemical groups and their relationships. And any harm must come from *wrong* learned decisions about how a specific chemical group in the dataset correlates with the target variable being inherited.
 
-What does a model *correctly* trained on PAMPA attend to, and how does
-transfer change that? Comparing scratch vs transfer variants makes this
-visible:
+| Pair        | Shared Molecules | % of Smaller Set | Shared Scaffolds | % of Smaller Set |
+| ----------- | ---------------- | ---------------- | ---------------- | ---------------- |
+| RLM ∩ PAMPA | 2,023            | 99.5%            | 1,385            | 99.6%\           |
 
-![PAMPA XGBoost scratch vs transfer](docs/figures/pampa-xgb-scratch-vs-transfer.png)
+### Results across all architectures
 
-*XGBoost: top 6 SHAP features before and after RLM transfer. Single
-fold; rankings may vary with different test sets.*
-
-The scratch model's top feature (Bit 807, blue) corresponds to a
-hydroxyl-bearing fragment and pushes toward "permeable" -- consistent
-with the known effect of moderate lipophilicity aiding membrane crossing.
-The remaining scratch features are predominantly red (impermeable),
-corresponding to nitrogen-containing heterocycles (Bits 168, 1480) and
-amide fragments (Bit 1917) that increase polarity and reduce passive
-permeability.
-
-The transfer model retains Bit 807 as its strongest feature (still blue,
-still correct), and Bit 168 (a nitrogen heterocycle, red/impermeable)
-also appears in both panels. But the transfer model's remaining top
-features are largely different: Bits 169 and 650 are nitrogen
-heterocycles pushed toward "impermeable" with higher magnitude than
-anything in the scratch model's lower-ranked features. These are RLM-
-inherited features: nitrogen heterocycles are CYP substrates
-(metabolically *unstable* in RLM → "inactive" label), and the transfer
-model carries over this "inactive" association to PAMPA where it
-translates to "impermeable." For some compounds this inherited bias
-happens to be correct (polar N-heterocycles *are* often impermeable),
-but for others -- lipophilic N-heterocycles that are actually permeable
--- it produces catastrophically wrong predictions. The net effect is that
-the transfer model over-relies on RLM-derived nitrogen-heterocycle
-signals at the expense of the lipophilicity features that actually govern
-permeability.
-
-![PAMPA Chemprop scratch vs transfer](docs/figures/pampa-chemprop-scratch-vs-transfer.png)
-
-*Chemprop: top 6 atom types by saliency before and after RLM transfer.
-Single fold; rankings may vary with different test sets.*
-
-The Chemprop panels show near-complete overlap: S deg2, N deg2, N deg3,
-and O(arom) deg2 appear in both top-6 lists. The rankings shift slightly
-(S deg2 stays #1 in both; the transfer model adds I deg1 and elevates
-S deg1), but the fundamental attention pattern is preserved. The model
-still attends to the same heteroatom environments that govern
-permeability. This confirms the architectural thesis: because Chemprop's
-transfer replaces the FFN head entirely, the encoder's learned attention
-pattern is not contaminated by the RLM objective. The encoder features
-(sulfur environments, aromatic oxygens, nitrogen donors) are general
-molecular descriptors useful for *many different property predictions* -- the new
-FFN head simply learns a different mapping from these features to the
-PAMPA target, unconstrained by old decision boundaries.
-
-### The XGBoost catastrophe
+So, how'd the models perform against the PAMPA target, with and without transfer learning? Let's see:
 
 | Model | Architecture | Transfer Strategy | AUC-PR (mean +/- std) | Best group |
 |---|---|---|---|---|
 | XGBoost RLM-transfer | Gradient-boosted trees (~3K) | Continue boosting from RLM | 0.853 +/- 0.045 | |
-| CheMeleon single-finetune | D-MPNN foundation (9.3M) | Foundation -> PAMPA (all weights) | 0.908 +/- 0.029 | * |
 | XGBoost scratch | Gradient-boosted trees (~3K) | None (Morgan FP) | 0.910 +/- 0.030 | * |
-| CheMeleon double-finetune | D-MPNN foundation (9.3M) | Foundation -> RLM -> PAMPA (all weights) | 0.912 +/- 0.025 | * |
 | Chemprop scratch | D-MPNN (318K) | None | 0.917 +/- 0.030 | * |
+| **Chemprop RLM-transfer** | **D-MPNN (318K)** | **Pre-train on RLM, new FFN head** | **0.925 +/- 0.026** | **\*** |
+| CheMeleon single-finetune | D-MPNN foundation (9.3M) | Foundation -> PAMPA (all weights) | 0.908 +/- 0.029 | * |
+| CheMeleon double-finetune | D-MPNN foundation (9.3M) | Foundation -> RLM -> PAMPA (all weights) | 0.912 +/- 0.025 | * |
 | CheMeleon frozen single | D-MPNN foundation (615K trainable) | Foundation -> PAMPA (FFN only) | 0.921 +/- 0.029 | * |
 | CheMeleon frozen double | D-MPNN foundation (615K trainable) | Foundation -> RLM -> PAMPA (FFN only) | 0.922 +/- 0.029 | * |
-| **Chemprop RLM-transfer** | **D-MPNN (318K)** | **Pre-train on RLM, new FFN head** | **0.925 +/- 0.026** | **\*** |
 
-\* Not statistically significantly different from the best model (Tukey
-HSD, FWER = 0.05).
+\* Not statistically significantly different from the best model (Tukey HSD, FWER = 0.05).
 
 ![PAMPA boxplots](docs/figures/boxplots-pampa-auc-pr.png)
 
-*AUC-PR distributions across 25 CV folds. Dotted line = random baseline
-(positive class prevalence, 0.855). XGBoost RLM-transfer sits at the
-baseline -- no better than guessing the majority class.*
+*AUC-PR distributions across 25 CV folds. Dotted line = random baseline (positive class prevalence, 0.855). XGBoost RLM-transfer sits at the baseline -- no better than guessing the majority class.*
 
 ![Tukey HSD PAMPA](docs/figures/tukey-hsd-pampa-auc-pr.png)
 
-*Tukey HSD simultaneous confidence intervals (FWER = 0.05). XGBoost
-RLM-transfer is the sole red outlier. All other models are statistically
-indistinguishable from the best.*
+*Tukey HSD simultaneous confidence intervals (FWER = 0.05). XGBoost RLM-transfer is the sole red outlier. All other models are statistically indistinguishable from the best.*
 
-The PAMPA random baseline is 0.855 (positive class prevalence). XGBoost
-RLM-transfer (0.853) performs *at or below* the random baseline --
-catastrophic negative transfer. Every other model, including XGBoost
-scratch, is in the statistically indistinguishable top group. This
-failure cannot be explained by the XGBoost source model being
-anomalously strong -- recall from [Validating the starting
-point](#validating-the-starting-point) that XGBoost learned RLM
-*significantly worse* than the D-MPNN architectures. A weaker source
-model still poisons the downstream task, because the problem is
-structural: inherited decision trees cannot be unlearned.
+The PAMPA random baseline is 0.855 (positive class prevalence). Only the XGBoost RLM-transfer (0.853) performs *at or below* the random baseline -- catastrophic negative knowledge transfer. Every other model, including XGBoost trained only on the PAMPA dataset, is in the statistically indistinguishable top group. The problem is inherent to model architecture: inherited decision trees an XGBoost model learned from the RLM dataset cannot be unlearned.
 
 The transfer effect by architecture tells the story:
 
 | Architecture | Delta from scratch |
 |---|---|
-| XGBoost | **-0.057** (catastrophic) |
-| Chemprop | +0.008 (slight improvement) |
-| CheMeleon (single -> double) | +0.004 (negligible) |
+| XGBoost | -0.057 (significant decrease) |
+| Chemprop | +0.008 (negligible improvement) |
+| CheMeleon (single -> double) | +0.004 (negligible improvement) |
 
-### Why: decision boundaries vs. representations
+### What the models learn: how transfer changes feature importance
 
-The difference comes from *where* transfer happens in each architecture.
+What does a model *correctly* trained on PAMPA attend to, and how does transfer change that? Comparing scratch vs transfer variants makes this visible:
 
-**XGBoost transfers at the decision boundary.** When we continue boosting
-from an RLM-pretrained model, new trees build on top of the existing RLM
-decision boundaries. If the target task has similar decision boundaries
-(HLM), this is helpful. If the target task has different decision
-boundaries (PAMPA), the existing trees actively mislead the model -- it
-starts from a wrong baseline, and the new trees must first undo the RLM
-predictions before learning PAMPA patterns.
+![PAMPA XGBoost scratch vs transfer](docs/figures/pampa-xgb-scratch-vs-transfer.png)
 
-An [ablation experiment](docs/xgb-transfer-ablation.md) confirms this damage to the xgboost performance on PAMPA by training on RLM target first is structural and irrecoverable: increasing the finetuning budget from 200 to 1000 rounds produces no improvement, because inherited trees
-permanently contribute to predictions and cannot be deleted or modified
-by subsequent boosting.
+*XGBoost: top 6 SHAP features before and after RLM transfer. Single fold; rankings may vary with different test sets.*
 
-**Chemprop transfers at the representation level.** When we load
-RLM-pretrained weights and replace the FFN head, the message-passing
-encoder retains learned molecular features while the decision layer is
-re-initialized from scratch. The encoder features (atom environments,
-functional group patterns, ring systems) are general enough to be useful
-for any molecular property, even if the specific property is unrelated.
-The new FFN head learns the correct mapping from these features to the
-target, unconstrained by old decision boundaries.
+The scratch model's top feature (Bit 807, blue) corresponds to a hydroxyl-bearing fragment and pushes toward "permeable" -- consistent with the known effect of moderate lipophilicity aiding membrane crossing. The remaining scratch features are predominantly red (impermeable), corresponding to nitrogen-containing heterocycles (Bits 168, 1480) and amide fragments (Bit 1917) that increase polarity and reduce passive permeability.
 
-This is the fundamental advantage of representation-level transfer: the
-features generalize even when the task does not.
+The transfer model retains Bit 807 as its strongest feature (still blue, still correct), and Bit 168 (a nitrogen heterocycle, red/impermeable) also appears in both panels. But the transfer model's remaining top features are largely different: Bits 169 and 650 are nitrogen heterocycles pushed toward "impermeable" with higher magnitude than anything in the scratch model's lower-ranked features. These are RLM-inherited features: nitrogen heterocycles are CYP substrates (metabolically *unstable* in RLM → "inactive" label), and the transfer model carries over this "inactive" association to PAMPA where it translates to "impermeable." For some compounds this inherited bias happens to be correct (polar N-heterocycles *are* often impermeable), but for others -- lipophilic N-heterocycles that are actually permeable -- it produces catastrophically wrong predictions. The net effect is that the transfer model over-relies on RLM-derived nitrogen-heterocycle signals at the expense of the lipophilicity features that actually govern permeability.
 
-### SHAP substructure analysis: what XGBoost transfer gets wrong
+A cross-story comparison sharpens the picture. Comparing the XGBoost RLM-transfer top-6 features on HLM (bits 1088, 1171, 145, 1722, 1028, 378) against the top-6 on PAMPA (bits 807, 168, 169, 389, 650, 378), only Bit 378 -- a nitrogen-containing fragment -- appears in both. The RLM pre-training creates a shared baseline of inherited trees, but finetuning on different targets pulls different features to prominence. This means XGBoost transfer isn't simply "stapling RLM features onto the target model." The inherited trees interact with the new trees in target-dependent ways, and only one feature survives as top-ranked across both endpoints. For HLM, where the inherited features are relevant, this interaction is productive. For PAMPA, where the inherited features are misleading, the same interaction is destructive.
 
-To understand the failure mechanistically, we used SHAP (TreeExplainer)
-to identify which Morgan fingerprint bits drive predictions for both the
-scratch and RLM-transfer models on PAMPA, then mapped those bits back to
-chemical substructures.
+![PAMPA Chemprop scratch vs transfer](docs/figures/pampa-chemprop-scratch-vs-transfer.png)
 
-**Known SAR context.** RLM stability is governed by metabolically
-vulnerable functional groups -- unprotected amines, benzylic positions,
-electron-rich aromatics, groups susceptible to CYP-mediated oxidation.
-PAMPA permeability is governed by lipophilicity, molecular size, hydrogen
-bond donor count, and polar surface area. A compound can have many
-CYP-vulnerable groups (unstable in RLM) yet still be highly permeable
-(if it's lipophilic), or vice versa.
+*Chemprop: top 6 atom types by saliency before and after RLM transfer. Single fold; rankings may vary with different test sets.*
 
-Of the top 50 most important SHAP features in each model, 33
-substructures show agreement (both models push in the same direction)
-and 9 show disagreement (opposite directions).
+The Chemprop feature importances for scratch model versus pre-trained on RLM show substantial overlap: S deg2, N deg3, and O(arom) deg2 appear in both top-6 lists and S deg2 stays #1 in both. But the transfer model introduces three new entries: S deg1 (terminal/thiol sulfur) rises to #2, I deg1 (iodine) enters at #4, and N(arom) deg2 (pyridine-like aromatic nitrogen) appears at #6. These replace the more generic N deg2, H deg1, and O deg1 from the scratch model. The pattern is chemically coherent: although RLM and PAMPA share 99.5% of their chemical matter, the RLM pre-training forced the encoder to learn representations that discriminate sulfur and halogen environments because those atom types correlate strongly with metabolic stability. A scratch model trained only on the PAMPA target has less pressure to refine representations for these specific atom types, even though the same compounds are present. The pre-trained encoder carries these sharpened representations forward, and they turn out to be useful for PAMPA too -- iodine and sulfur both strongly influence lipophilicity and membrane partitioning. The fundamental attention pattern is preserved despite these shifts, confirming the architectural thesis: because Chemprop's transfer replaces the FFN head entirely, the encoder's attention is not contaminated by the RLM objective. The encoder features are general molecular descriptors useful for many different property predictions -- the new FFN head simply learns a different mapping from these features to the PAMPA target, unconstrained by old decision boundaries.
 
-![Substructure agreement/disagreement](docs/figures/shap-substructure-agree-disagree.png)
+The same sulfur-elevation pattern due to RLM's dataset appeared in the HLM story: RLM pre-training elevated S deg3 and S deg1 to top positions in HLM as well. Across both targets, RLM pre-training consistently sharpens the encoder's attention to sulfur-containing functional groups and displaces generic, high-frequency atom types (O deg1, N deg2, H deg1) from the top ranks. The displaced features are ubiquitous in drug-like molecules -- nearly every compound has secondary amines, hydrogens, and oxygens -- so their high scratch-model saliency likely reflects prevalence rather than discriminating power. The RLM training objective pressures the encoder to develop sharper representations for atom types that actually differentiate stable from unstable compounds, and this refinement carries over as a generally improved molecular vocabulary. This consistent effect across two mechanistically unrelated targets reinforces that D-MPNN transfer operates at the level of molecular vocabulary, not task-specific associations.
 
-*Top 50 SHAP features from both XGBoost scratch and XGBoost RLM-transfer
-on PAMPA. Green = both models push the same direction. Red = opposite
-directions (transfer model inherits wrong association from RLM).*
+### Why transfer learning's impact is different for different model architectures
 
-**Agreed substructures (green)** include aromatic ring systems and
-lipophilic fragments that both models correctly associate with
-permeability. These are structural features whose effect on PAMPA
-permeability happens to align with their effect on metabolic stability
-(e.g., fused aromatic systems tend to be both permeable and somewhat
-metabolically stable due to lack of sp3 soft spots).
+The causal difference in how the models transfer learn differently comes from *where* knowledge transfer happens in each architecture.
 
-**Disagreed substructures (red)** include amide-containing fragments and
-alkyl chains where the scratch model learned "impermeable" (possibly
-because amide NH donors reduce permeability) but the transfer model
-learned "permeable" from RLM (possibly because amide bonds are
-metabolically stable -- not CYP substrates). This is the mechanism by
-which RLM pre-training misleads the PAMPA model: substructures that are
-*good* for metabolic stability (and thus associated with "active" in
-RLM) are *bad* for permeability, and the transfer model inherits the
-wrong association.
+XGBoost transfers at the decision boundary. When we continue boosting from an RLM-pretrained model, new trees build on top of the existing RLM decision boundaries. If the target task has similar decision boundaries (HLM), this is helpful. If the target task has different decision boundaries (PAMPA), the existing trees actively mislead the model -- it starts from a wrong baseline, and the new trees must first undo the RLM predictions before learning PAMPA patterns.
 
-The SHAP magnitude of the disagreed substructures is comparable to
-the agreed ones, which explains why the transfer model collapses
-entirely to the random baseline: the wrong signals inherited from RLM
-are strong enough to overwhelm the correct associations, dragging
-predictions to chance levels across the test set.
+An [ablation experiment](docs/xgb-transfer-ablation.md) confirms this damage to the xgboost performance on PAMPA by training on RLM target first is structural and irrecoverable: increasing the finetuning budget from 200 to 1000 rounds produces no improvement, because inherited trees permanently contribute to predictions and cannot be deleted or modified by subsequent boosting.
 
-### Chemprop gradient saliency: how the D-MPNN handles the same problem
+Chemprop transfers at the representation level. When we load RLM-pretrained weights and replace the FFN head, the message-passing encoder retains learned molecular features while the decision layer is re-initialized from scratch. The encoder features (atom environments, functional group patterns, ring systems) are general enough to be useful for any molecular property, even if the specific property is unrelated. The new FFN head learns the correct mapping from these features to the target, unconstrained by old decision boundaries.
 
-We performed the same agree/disagree analysis on Chemprop using per-atom
-gradient saliency (`|dPred/dAtomFeatures|`), aggregating by atom type
-(element + aromaticity + degree) across 100 sampled PAMPA test molecules
-for both the scratch and RLM-transfer models.
-
-**The D-MPNN shows far fewer disagreements.** Where XGBoost had 9
-substructural environments with opposite SHAP directions, Chemprop's
-atom-type saliency shows smaller and fewer disagreements between scratch
-and transfer. This is consistent with the architecture difference:
-Chemprop's transfer replaces the FFN head entirely, so the encoder's
-attention pattern is less directly distorted by the old task.
-
-![Chemprop substructure agree/disagree](docs/figures/chemprop-substructure-agree-disagree.png)
-
-*Same analysis for Chemprop: per-atom gradient saliency aggregated by
-atom type. Far fewer and smaller disagreements between scratch and
-transfer models -- the re-initialized FFN head prevents inherited bias.*
-
-The per-molecule saliency difference maps (transfer minus scratch,
-red/green diverging gradient) confirm this: for the same failure
-molecules where XGBoost transfer was catastrophically wrong, Chemprop
-transfer shows only modest shifts in atom-level attention, and both
-Chemprop models correctly predict the molecules as permeable.
-
-![XGBoost vs Chemprop failure comparison](docs/figures/xgb-vs-chemprop-failure-comparison.png)
-
-*Per-molecule saliency/SHAP comparison on a PAMPA test molecule that
-XGBoost RLM-transfer gets catastrophically wrong but Chemprop handles
-correctly. Red = atoms/bits pushing toward wrong prediction.*
-
-**XGBoost failure molecule #1** (true: permeable):
-- XGBoost scratch: P(active) = 0.918 (correct)
-- XGBoost RLM-transfer: P(active) = 0.248 (catastrophically wrong)
-- Chemprop scratch: P(active) = 0.955 (correct)
-- Chemprop RLM-transfer: P(active) = 0.958 (correct)
-
-The XGBoost transfer model relied on RLM-inherited fingerprint bits that
-pushed toward "inactive" -- substructures that are metabolically stable
-(good for RLM) but the model incorrectly associates with impermeability.
-The Chemprop model, having re-initialized its FFN head, is not
-constrained by this inherited bias.
-
-### Architecture comparison summary
-
-| Aspect | XGBoost | Chemprop |
-|---|---|---|
-| Transfer mechanism | Continue boosting (shared trees) | New FFN head (shared encoder) |
-| Attribution method | SHAP (per-fingerprint-bit) | Gradient saliency (per-atom) |
-| Substructure agreement | 33 of 42 important substructures | Most atom types agree |
-| Substructure disagreement | 9 substructures with opposite direction | Few, small-magnitude disagreements |
-| Failure mode | RLM decision boundaries poison predictions | Encoder features remain general |
-| PAMPA transfer effect | -0.057 AUC-PR (catastrophic) | +0.008 AUC-PR (slight improvement) |
+This is the fundamental advantage of representation-level transfer: the features generalize even when the task does not.
 
 ---
 
 ## Sidebar: The Foundation Model Puzzle
 
-Our initial experiments used only the first six models, with CheMeleon
-fully finetuned. The foundation model produced counterintuitively *worse*
-results than the much smaller Chemprop -- which led us to hypothesize
-overfitting and add the frozen-encoder variants. See
-[docs/chemeleon-overfitting.md](docs/chemeleon-overfitting.md) for the
-full narrative.
+Our initial experiments used only the first six models, with CheMeleon fully finetuned. The foundation model produced counterintuitively *worse* results than the much smaller Chemprop -- which led us to hypothesize overfitting and add the frozen-encoder variants. See [docs/chemeleon-overfitting.md](docs/chemeleon-overfitting.md) for the full narrative.
 
 ### The problem
 
-CheMeleon single-finetune (0.908 AUC-PR) is worse than Chemprop scratch
-(0.917) on PAMPA, though the difference is not statistically significant
-(Tukey HSD, p = 0.98). With 9.3M parameters and ~1,626 PAMPA training
-samples, CheMeleon is extremely overparameterized. The foundation
-pre-training provides a reasonable initialization, but 30 epochs of
-finetuning is enough to overfit. The smaller Chemprop model (318K params)
-has less capacity to memorize noise.
+CheMeleon single-finetune (0.908 AUC-PR) is worse than Chemprop scratch (0.917) on PAMPA, though the difference is not statistically significant (Tukey HSD, p = 0.98). With 9.3M parameters and ~1,626 PAMPA training samples, CheMeleon is extremely overparameterized. The foundation pre-training provides a reasonable initialization, but 30 epochs of finetuning is enough to overfit. The smaller Chemprop model (318K params) has less capacity to memorize noise.
 
 ### The fix: freeze the encoder
 
-We froze the 8.7M-parameter BondMessagePassing layer and trained only the
-FFN head (~615K trainable parameters). If the foundation representations
-are good enough and the full-finetune models were overfitting, the frozen
-variants should improve.
+We froze the 8.7M-parameter BondMessagePassing layer and trained only the FFN head (~615K trainable parameters). If the foundation representations are good enough and the full-finetune models were overfitting, the frozen variants should improve.
 
 | Target | Model | AUC-PR (mean +/- std) |
 |---|---|---|
@@ -615,69 +279,29 @@ variants should improve.
 
 ![CheMeleon frozen vs unfrozen boxplots](docs/figures/chemeleon-frozen-boxplots.png)
 
-*AUC-PR distributions for CheMeleon variants only. Green = unfrozen
-(all weights finetuned). Purple = frozen encoder (FFN only).*
+*AUC-PR distributions for CheMeleon variants only. Green = unfrozen (all weights finetuned). Purple = frozen encoder (FFN only).*
 
 ![CheMeleon frozen vs unfrozen Tukey HSD](docs/figures/chemeleon-frozen-tukey-hsd.png)
 
 *Tukey HSD comparing frozen vs unfrozen CheMeleon variants (FWER = 0.05).*
 
-**HLM**: No significant differences between any frozen/unfrozen variant
-(Tukey HSD, all p > 0.06). The encoder adaptation during full finetuning
-neither helps nor hurts for the related endpoint.
+**HLM**: No significant differences between any frozen/unfrozen variant (Tukey HSD, all p > 0.06). The encoder adaptation during full finetuning neither helps nor hurts for the related endpoint.
 
-**PAMPA**: Freezing improves performance. Under AUC-ROC the improvement
-is statistically significant (frozen single 0.730 vs unfrozen single
-0.676, p = 0.001), confirming the overfitting hypothesis. Under AUC-PR
-the effect is present but compressed by the narrow effective range above
-the 0.855 baseline.
+**PAMPA**: Freezing improves performance. Under AUC-ROC the improvement is statistically significant (frozen single 0.730 vs unfrozen single 0.676, p = 0.001), confirming the overfitting hypothesis. Under AUC-PR the effect is present but compressed by the narrow effective range above the 0.855 baseline.
 
 ### What the frozen encoder attends to
 
-With the encoder frozen, only the FFN head differs between single and
-double finetune. Does the intermediate RLM step change what the model
-attends to?
+With the encoder frozen, only the FFN head differs between single and double finetune. Does the intermediate RLM step change what the model attends to?
 
 ![CheMeleon frozen single vs double](docs/figures/pampa-chemeleon-single-vs-double.png)
 
-*CheMeleon frozen single-finetune (Foundation→PAMPA) vs frozen
-double-finetune (Foundation→RLM→PAMPA). Top 6 atom types by gradient
-saliency. Since the encoder is frozen, differences reflect the FFN
-head only. Single fold.*
+*CheMeleon frozen single-finetune (Foundation→PAMPA) vs frozen double-finetune (Foundation→RLM→PAMPA). Top 6 atom types by gradient saliency. Since the encoder is frozen, differences reflect the FFN head only. Single fold.*
 
-The two panels are nearly identical: S deg1, O(arom) deg2, S deg2,
-S deg4, S(arom) deg2, and N(arom) deg3 appear in both top-6 lists in
-the same order. Importantly, the two models are not *forced* to attend
-to the same features just because the encoder is frozen. The saliency
-measurement captures how much the final prediction depends on each atom,
-which is influenced by both the encoder and the decision-making layer
-(FFN head). Since the FFN heads were trained via different paths (one
-saw RLM data, one did not), they could in principle weight the encoder's
-outputs differently. The fact that they don't -- that independently
-trained decision layers converge on the same atomic attention pattern --
-suggests the foundation encoder produces features whose relative
-importance is baked into the representation itself, not imposed by
-downstream training.
+The two panels are nearly identical: S deg1, O(arom) deg2, S deg2, S deg4, S(arom) deg2, and N(arom) deg3 appear in both top-6 lists in the same order. Importantly, the two models are not *forced* to attend to the same features just because the encoder is frozen. The saliency measurement captures how much the final prediction depends on each atom, which is influenced by both the encoder and the decision-making layer (FFN head). Since the FFN heads were trained via different paths (one saw RLM data, one did not), they could in principle weight the encoder's outputs differently. The fact that they don't -- that independently trained decision layers converge on the same atomic attention pattern -- suggests the foundation encoder produces features whose relative importance is baked into the representation itself, not imposed by downstream training.
 
-The dominance of sulfur environments (S deg1, S deg2, S deg4, S(arom)
-deg2 -- four of the top six) is chemically interesting. Thioethers and
-sulfonamides are common motifs in drug-like molecules that affect both
-lipophilicity (via the polarizable sulfur atom) and membrane
-partitioning. The CheMeleon foundation model, pre-trained on Mordred
-descriptors across 1M compounds, appears to have learned particularly
-discriminating representations for sulfur-containing functional groups.
-Aromatic oxygens (O(arom) deg2 -- furan/pyran-type oxygens) and
-aromatic nitrogens (N(arom) deg3 -- trisubstituted pyridine-like
-nitrogens) round out the top features, both of which influence the
-balance of lipophilicity and hydrogen bonding that governs passive
-permeability.
+The dominance of sulfur environments (S deg1, S deg2, S deg4, S(arom) deg2 -- four of the top six) is chemically interesting. Thioethers and sulfonamides are common motifs in drug-like molecules that affect both lipophilicity (via the polarizable sulfur atom) and membrane partitioning. The CheMeleon foundation model, pre-trained on Mordred descriptors across 1M compounds, appears to have learned particularly discriminating representations for sulfur-containing functional groups. Aromatic oxygens (O(arom) deg2 -- furan/pyran-type oxygens) and aromatic nitrogens (N(arom) deg3 -- trisubstituted pyridine-like nitrogens) round out the top features, both of which influence the balance of lipophilicity and hydrogen bonding that governs passive permeability.
 
-The frozen CheMeleon models are statistically indistinguishable from
-Chemprop RLM-transfer under both AUC-PR (p > 0.99) and AUC-ROC
-(p > 0.98) on PAMPA. The CheMeleon foundation representations -- learned
-from 1M PubChem compounds predicting Mordred descriptors -- are genuinely
-useful general molecular features, but only when the model is prevented
-from overwriting them during finetuning on a small dataset.
+The frozen CheMeleon models are statistically indistinguishable from Chemprop RLM-transfer under both AUC-PR (p > 0.99) and AUC-ROC (p > 0.98) on PAMPA. The CheMeleon foundation representations -- learned from 1M PubChem compounds predicting Mordred descriptors -- are genuinely useful general molecular features, but only when the model is prevented from overwriting them during finetuning on a small dataset.
 
 ---
 
@@ -685,26 +309,13 @@ from overwriting them during finetuning on a small dataset.
 
 ### The elephant in the room: why not just use XGBoost?
 
-Look at the PAMPA results again. XGBoost scratch scores 0.910 AUC-PR.
-Chemprop RLM-transfer -- the best model, after pre-training on a related
-endpoint, training a 318K-parameter neural network, and carefully managing
-the transfer protocol -- scores 0.925. That's a 0.015 improvement, not
-statistically significant. On HLM, the gap is wider (0.739 vs 0.831), but
-XGBoost with RLM transfer (0.789) is competitive with Chemprop scratch
-(0.793).
+Look at the PAMPA results again. XGBoost scratch scores 0.910 AUC-PR. Chemprop RLM-transfer -- the best model, after pre-training on a related endpoint, training a 318K-parameter neural network, and carefully managing the transfer protocol -- scores 0.925. That's a 0.015 improvement, not statistically significant. On HLM, the gap is wider (0.739 vs 0.831), but XGBoost with RLM transfer (0.789) is competitive with Chemprop scratch (0.793).
 
 So: why bother with graph neural networks at all?
 
-The honest answer is that *on these datasets, at this scale*, the
-practical performance difference is small. A medicinal chemist making
-go/no-go decisions would get similar value from a well-tuned XGBoost on
-Morgan fingerprints as from a D-MPNN, for most compounds. The XGBoost
-model trains in seconds, requires no GPU, has mature interpretability
-tooling (SHAP), and is easy to deploy. These are real advantages.
+The honest answer is that *on these datasets, at this scale*, the practical performance difference is small. A medicinal chemist making go/no-go decisions would get similar value from a well-tuned XGBoost on Morgan fingerprints as from a D-MPNN, for most compounds. The XGBoost model trains in seconds, requires no GPU, has mature interpretability tooling (SHAP), and is easy to deploy. These are real advantages.
 
-But the results reveal a more subtle argument for the D-MPNN
-architectures, one that has nothing to do with peak accuracy on a
-leaderboard:
+But the results reveal a more subtle argument for the D-MPNN architectures, one that has nothing to do with peak accuracy on a leaderboard:
 
 1. **Robustness to bad transfer.** The most practically dangerous
    scenario in pharmaceutical ML is not "my model is 2% worse than
@@ -753,17 +364,7 @@ leaderboard:
    decision trees that cannot be repurposed or composed with other
    systems.
 
-None of this means XGBoost is the wrong choice for a team that needs a
-quick, interpretable model for a single ADME endpoint with a few thousand
-compounds. It probably *is* the right first model in that scenario. But
-the results here show that as soon as you start building transfer
-learning pipelines -- as soon as you want to leverage knowledge across
-endpoints, accumulate institutional learning across projects, or build
-systems that are robust to imperfect pre-training choices -- the
-architectural properties of D-MPNNs (separable encoder/head, transferable
-representations, graceful degradation under irrelevant transfer) become
-decisive advantages that no amount of XGBoost hyperparameter tuning can
-replicate.
+None of this means XGBoost is the wrong choice for a team that needs a quick, interpretable model for a single ADME endpoint with a few thousand compounds. It probably *is* the right first model in that scenario. But the results here show that as soon as you start building transfer learning pipelines -- as soon as you want to leverage knowledge across endpoints, accumulate institutional learning across projects, or build systems that are robust to imperfect pre-training choices -- the architectural properties of D-MPNNs (separable encoder/head, transferable representations, graceful degradation under irrelevant transfer) become decisive advantages that no amount of XGBoost hyperparameter tuning can replicate.
 
 ### Key findings
 
@@ -791,10 +392,7 @@ On this dataset and at this scale (~900-2,500 compounds per endpoint):
   CheMeleon became statistically indistinguishable from the best models
   on both endpoints.
 
-These results are specific to the NCATS ADME public subsets and the
-particular model configurations tested. Different dataset sizes, endpoint
-types, hyperparameter choices, or pre-training strategies could yield
-different rankings.
+These results are specific to the NCATS ADME public subsets and the particular model configurations tested. Different dataset sizes, endpoint types, hyperparameter choices, or pre-training strategies could yield different rankings.
 
 ### Additional experiments
 
@@ -820,24 +418,13 @@ Two supplementary analyses extend the main findings:
 
 ### Dataset details
 
-**RLM and HLM Stability** both measure microsomal metabolic stability --
-the rate at which liver microsome enzymes (predominantly CYP450s) break
-down a compound. RLM uses rat liver microsomes, HLM uses human. Although
-the specific CYP isoform profiles differ between species, the underlying
-biochemistry is the same: compounds with metabolically labile functional
-groups (e.g., unprotected amines, benzylic positions, electron-rich
-aromatics) tend to be unstable in both species.
+**RLM and HLM Stability** both measure microsomal metabolic stability -- the rate at which liver microsome enzymes (predominantly CYP450s) break down a compound. RLM uses rat liver microsomes, HLM uses human. Although the specific CYP isoform profiles differ between species, the underlying biochemistry is the same: compounds with metabolically labile functional groups (e.g., unprotected amines, benzylic positions, electron-rich aromatics) tend to be unstable in both species.
 
-**PAMPA pH 7.4** measures passive membrane permeability via an artificial
-phospholipid membrane. Permeability depends on lipophilicity, molecular
-size, hydrogen bond donor/acceptor count, and conformational flexibility.
-This is fundamentally different from the enzymatic metabolism that RLM/HLM
-measure.
+**PAMPA pH 7.4** measures passive membrane permeability via an artificial phospholipid membrane. Permeability depends on lipophilicity, molecular size, hydrogen bond donor/acceptor count, and conformational flexibility. This is fundamentally different from the enzymatic metabolism that RLM/HLM measure.
 
 ![Class balance](docs/figures/eda-class-balance.png)
 
-*Binary label distributions. HLM is roughly balanced; PAMPA is heavily
-imbalanced (86% permeable), motivating AUC-PR as the primary metric.*
+*Binary label distributions. HLM is roughly balanced; PAMPA is heavily imbalanced (86% permeable), motivating AUC-PR as the primary metric.*
 
 #### Molecule overlap
 
@@ -847,42 +434,29 @@ imbalanced (86% permeable), motivating AUC-PR as the primary metric.*
 | RLM ∩ PAMPA | 2,023 | 99.5% | 1,385 | 99.6% |
 | HLM ∩ PAMPA | 41 | 4.6% | 84 | 11.6% |
 
-RLM and PAMPA share 99.5% of molecules (same compound library), making
-the RLM->PAMPA transfer a clean test where any benefit must come from
-representation learning, not exposure to new chemical matter. HLM has
-minimal overlap with either endpoint.
+RLM and PAMPA share 99.5% of molecules (same compound library), making the RLM->PAMPA transfer a clean test where any benefit must come from representation learning, not exposure to new chemical matter. HLM has minimal overlap with either endpoint.
 
 #### Continuous value distributions
 
 ![Continuous value distributions](docs/figures/eda-continuous-distributions.png)
 
-*Raw continuous assay values before binarization. Censored values
-(at assay limits) shown separately.*
+*Raw continuous assay values before binarization. Censored values (at assay limits) shown separately.*
 
 #### Chemical space (PaCMAP)
 
-Morgan fingerprints (2048-bit, radius 3) embedded to 2D via PaCMAP.
-A single shared embedding across all endpoints.
+Morgan fingerprints (2048-bit, radius 3) embedded to 2D via PaCMAP. A single shared embedding across all endpoints.
 
 ![PaCMAP scatter by label](docs/figures/eda-pacmap-scatter.png)
 
-*2D PaCMAP embedding of Morgan fingerprints, colored by binary label.
-Single shared embedding across all endpoints.*
+*2D PaCMAP embedding of Morgan fingerprints, colored by binary label. Single shared embedding across all endpoints.*
 
 ![PaCMAP hexbin density](docs/figures/eda-pacmap-hexbin.png)
 
-*Same embedding as hexbin density plot, showing compound density
-across chemical space.*
+*Same embedding as hexbin density plot, showing compound density across chemical space.*
 
 ### Splitting strategy
 
-Following [Walters' methodology](https://practicalcheminformatics.blogspot.com/2024/11/some-thoughts-on-splitting-chemical.html),
-PaCMAP-based clustering splits are used instead of Murcko scaffold
-splits. This prevents data leakage from structural similarity: molecules
-in different folds are guaranteed to occupy distinct regions of chemical
-space, so performance on the test fold reflects generalization to
-genuinely new chemical matter rather than interpolation between similar
-training examples.
+Following Walters' methodology <sup>[4][5]</sup>, PaCMAP-based clustering splits are used instead of Murcko scaffold splits. This prevents data leakage from structural similarity: molecules in different folds are guaranteed to occupy distinct regions of chemical space, so performance on the test fold reflects generalization to genuinely new chemical matter rather than interpolation between similar training examples.
 
 1. Morgan fingerprints -> PaCMAP 2D embedding
 2. KMeans (k=50) clustering in PaCMAP space
@@ -892,20 +466,13 @@ training examples.
 
 #### Fold quality assessment
 
-Two diagnostics confirm the splits produce chemically distinct,
-non-redundant folds.
+Two diagnostics confirm the splits produce chemically distinct, non-redundant folds.
 
-**Chemical distinctness (5-NN Tanimoto distance).** For each molecule in
-the test fold, we compute the Tanimoto distance to its 5 nearest
-neighbors in the training folds (cross-fold) vs within the same test fold
-(within-fold). If splits separate chemically distinct neighborhoods,
-cross-fold distances should exceed within-fold distances.
+**Chemical distinctness (5-NN Tanimoto distance).** For each molecule in the test fold, we compute the Tanimoto distance to its 5 nearest neighbors in the training folds (cross-fold) vs within the same test fold (within-fold). If splits separate chemically distinct neighborhoods, cross-fold distances should exceed within-fold distances.
 
 ![Tanimoto 5-NN distances](docs/figures/fold-tanimoto-nn.png)
 
-*Distribution of Tanimoto distances to 5 nearest neighbors: within-fold
-(same test fold) vs cross-fold (training folds). Larger cross-fold
-distances indicate chemically distinct splits.*
+*Distribution of Tanimoto distances to 5 nearest neighbors: within-fold (same test fold) vs cross-fold (training folds). Larger cross-fold distances indicate chemically distinct splits.*
 
 | Endpoint | Within-fold median | Cross-fold median | Shift |
 |---|---|---|---|
@@ -913,24 +480,13 @@ distances indicate chemically distinct splits.*
 | HLM Stability | 0.816 | 0.811 | -0.005 |
 | PAMPA pH 7.4 | 0.619 | 0.775 | +0.156 |
 
-RLM and PAMPA show clear separation: cross-fold 5-NN distances are
-substantially larger than within-fold, confirming molecules in the test
-fold are more chemically distant from the training set than from their
-own fold-mates. HLM shows minimal shift, likely because the dataset is
-small (900 compounds) and the chemical space is compact -- even molecules
-in different folds are not far apart.
+RLM and PAMPA show clear separation: cross-fold 5-NN distances are substantially larger than within-fold, confirming molecules in the test fold are more chemically distant from the training set than from their own fold-mates. HLM shows minimal shift, likely because the dataset is small (900 compounds) and the chemical space is compact -- even molecules in different folds are not far apart.
 
-**Replicate variation (best-match Jaccard).** For each fold in replicate
-A, we find the fold in replicate B with the highest molecule overlap
-(Jaccard similarity). Since fold indices are arbitrary, this best-match
-comparison avoids penalizing mere index permutations -- it measures
-whether the shuffled replicates produce genuinely different partitions.
+**Replicate variation (best-match Jaccard).** For each fold in replicate A, we find the fold in replicate B with the highest molecule overlap (Jaccard similarity). Since fold indices are arbitrary, this best-match comparison avoids penalizing mere index permutations -- it measures whether the shuffled replicates produce genuinely different partitions.
 
 ![Replicate variation](docs/figures/fold-replicate-variation.png)
 
-*Best-match Jaccard similarity between folds across replicates. Low
-values (~0.25) confirm the 5 replicates produce genuinely different
-partitions.*
+*Best-match Jaccard similarity between folds across replicates. Low values (~0.25) confirm the 5 replicates produce genuinely different partitions.*
 
 | Endpoint | Mean best-match Jaccard | Range |
 |---|---|---|
@@ -938,31 +494,17 @@ partitions.*
 | HLM Stability | 0.238 | 0.150 -- 0.409 |
 | PAMPA pH 7.4 | 0.252 | 0.111 -- 0.445 |
 
-Even the most overlapping fold pair across replicates shares only ~25%
-of molecules on average. The 5 replicates produce meaningfully different
-partitions, which is why the 5x5 CV provides 25 non-redundant performance
-estimates for statistical testing.
+Even the most overlapping fold pair across replicates shares only ~25% of molecules on average. The 5 replicates produce meaningfully different partitions, which is why the 5x5 CV provides 25 non-redundant performance estimates for statistical testing.
 
 ### Metric choice: AUC-PR over AUC-ROC
 
-PAMPA has severe class imbalance (86% permeable / 14% impermeable). Under
-AUC-ROC, a model can score well by correctly classifying the large
-majority class while failing on the minority class. AUC-PR (Average
-Precision) focuses on precision-recall performance and is more sensitive
-to minority-class errors.
+PAMPA has severe class imbalance (86% permeable / 14% impermeable). Under AUC-ROC, a model can score well by correctly classifying the large majority class while failing on the minority class. AUC-PR (Average Precision) focuses on precision-recall performance and is more sensitive to minority-class errors.
 
-We report AUC-PR as the primary metric throughout. The random-classifier
-baseline for AUC-PR equals the positive class prevalence: 0.602 for HLM
-and 0.855 for PAMPA. All conclusions were also verified under AUC-ROC,
-which produces the same qualitative story (same best-group membership,
-same catastrophic XGBoost failure); AUC-ROC values are included in the
-supplementary tables for reference.
+We report AUC-PR as the primary metric throughout. The random-classifier baseline for AUC-PR equals the positive class prevalence: 0.602 for HLM and 0.855 for PAMPA. All conclusions were also verified under AUC-ROC, which produces the same qualitative story (same best-group membership, same catastrophic XGBoost failure); AUC-ROC values are included in the supplementary tables for reference.
 
 ### Supplementary: AUC-ROC results
 
-For comparison with prior literature that reports AUC-ROC, the full
-results under that metric are below. Rankings and best-group membership
-are similar but not identical to AUC-PR.
+For comparison with prior literature that reports AUC-ROC, the full results under that metric are below. Rankings and best-group membership are similar but not identical to AUC-PR.
 
 | Target | Model | AUC-ROC (mean +/- std) | Best group |
 |---|---|---|---|
@@ -987,14 +529,7 @@ are similar but not identical to AUC-PR.
 
 ![All models Tukey HSD](docs/figures/all-models-tukey-hsd.png)
 
-Tukey HSD simultaneous confidence intervals (AUC-PR, FWER = 0.05). The
-reference model (highest mean) is highlighted. Groups colored red are
-significantly different from the reference. Groups colored gray are not
-significantly different. Non-overlapping intervals between any two groups
-indicate a significant difference. Note: all intervals within each panel
-have identical widths -- this is expected with balanced group sizes (n=25);
-see [docs/tukey-hsd-interval-widths.md](docs/tukey-hsd-interval-widths.md)
-for details.
+Tukey HSD simultaneous confidence intervals (AUC-PR, FWER = 0.05). The reference model (highest mean) is highlighted. Groups colored red are significantly different from the reference. Groups colored gray are not significantly different. Non-overlapping intervals between any two groups indicate a significant difference. Note: all intervals within each panel have identical widths -- this is expected with balanced group sizes (n=25); see [docs/tukey-hsd-interval-widths.md](docs/tukey-hsd-interval-widths.md) for details.
 
 ![XGBoost boxplots](docs/figures/xgb-boxplots.png)
 
@@ -1002,8 +537,7 @@ for details.
 
 ![XGBoost paired comparison](docs/figures/xgb-paired-comparison.png)
 
-*Paired fold comparison (lines connect same fold). Blue = transfer wins,
-red = scratch wins.*
+*Paired fold comparison (lines connect same fold). Blue = transfer wins, red = scratch wins.*
 
 ![XGBoost Tukey HSD](docs/figures/xgb-tukey-hsd.png)
 
@@ -1086,14 +620,14 @@ uv run marimo edit notebooks/15-data-efficiency.py
 
 ## References
 
-- Cai, C. *et al.* Transfer Learning for Drug Discovery. *J Med Chem* **63**, 8683–8694 (2020).
-- Heid, E. *et al.* Chemprop: A Machine Learning Package for Chemical Property Prediction. *J Chem Inf Model* **64**, 9–17 (2024).
-- Li, X. & Fourches, D. Inductive transfer learning for molecular activity prediction: Next-Gen QSAR Models with MolPMoFiT. *J Cheminformatics* **12**, 27 (2020).
-- Liu, R., Laxminarayan, S., Reifman, J. & Wallqvist, A. Enabling data-limited chemical bioactivity predictions through deep neural network transfer learning. *J Comput Aid Mol Des* **36**, 867–878 (2022).
-- Walters, P. Practically significant method comparison protocols for machine learning in drug discovery. *ChemRxiv* (2024). [doi:10.26434/chemrxiv-2024-6dbwv-v2](https://chemrxiv.org/doi/full/10.26434/chemrxiv-2024-6dbwv-v2)
-- Walters, P. [Some Thoughts on Splitting Chemical Datasets](https://practicalcheminformatics.blogspot.com/2024/11/some-thoughts-on-splitting-chemical.html). Practical Cheminformatics, 2024.
-- Walters, P. [Even More Thoughts on ML Method Comparison](https://practicalcheminformatics.blogspot.com/2025/03/even-more-thoughts-on-ml-method.html). Practical Cheminformatics, 2025.
-- Yang, K. *et al.* Analyzing Learned Molecular Representations for Property Prediction. *J Chem Inf Model* **59**, 3370–3388 (2019).
-- Chemprop: [github.com/chemprop/chemprop](https://github.com/chemprop/chemprop)
-- CheMeleon: [github.com/JacksonBurns/chemeleon](https://github.com/JacksonBurns/chemeleon) / [Zenodo](https://zenodo.org/records/15460715)
-- NCATS ADME: [opendata.ncats.nih.gov/adme](https://opendata.ncats.nih.gov/adme)
+1. Liu, R., Laxminarayan, S., Reifman, J. & Wallqvist, A. Enabling data-limited chemical bioactivity predictions through deep neural network transfer learning. *J Comput Aid Mol Des* **36**, 867–878 (2022).
+2. Li, X. & Fourches, D. Inductive transfer learning for molecular activity prediction: Next-Gen QSAR Models with MolPMoFiT. *J Cheminformatics* **12**, 27 (2020).
+3. Cai, C. *et al.* Transfer Learning for Drug Discovery. *J Med Chem* **63**, 8683–8694 (2020).
+4. Walters, P. Practically significant method comparison protocols for machine learning in drug discovery. *ChemRxiv* (2024). [doi:10.26434/chemrxiv-2024-6dbwv-v2](https://chemrxiv.org/doi/full/10.26434/chemrxiv-2024-6dbwv-v2)
+5. Walters, P. [Some Thoughts on Splitting Chemical Datasets](https://practicalcheminformatics.blogspot.com/2024/11/some-thoughts-on-splitting-chemical.html). Practical Cheminformatics, 2024.
+6. Walters, P. [Even More Thoughts on ML Method Comparison](https://practicalcheminformatics.blogspot.com/2025/03/even-more-thoughts-on-ml-method.html). Practical Cheminformatics, 2025.
+7. Yang, K. *et al.* Analyzing Learned Molecular Representations for Property Prediction. *J Chem Inf Model* **59**, 3370–3388 (2019).
+8. Heid, E. *et al.* Chemprop: A Machine Learning Package for Chemical Property Prediction. *J Chem Inf Model* **64**, 9–17 (2024).
+9. Chemprop: [github.com/chemprop/chemprop](https://github.com/chemprop/chemprop)
+10. CheMeleon: [github.com/JacksonBurns/chemeleon](https://github.com/JacksonBurns/chemeleon) / [Zenodo](https://zenodo.org/records/15460715)
+11. NCATS ADME: [opendata.ncats.nih.gov/adme](https://opendata.ncats.nih.gov/adme)
