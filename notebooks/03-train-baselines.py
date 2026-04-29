@@ -109,12 +109,17 @@ def _(mo):
     mo.md("""
     ## Step 2: XGBoost Training
 
-    For each target endpoint (HLM, PAMPA), train two XGBoost variants across
+    For each target endpoint (HLM, PAMPA), train three XGBoost variants across
     25 folds (5 replicates x 5 folds, loaded from notebook 02):
 
     1. **From scratch**: train only on the target endpoint's training fold
-    2. **Transfer (RLM pretrain)**: train on full RLM dataset first, then
-       continue boosting on the target endpoint's training fold
+    2. **Decision-boundary transfer (RLM pretrain)**: train on full RLM dataset
+       first, then continue boosting on the target endpoint's training fold.
+       Inherited trees permanently contribute to every prediction.
+    3. **Feature-importance transfer (RLM pretrain)**: train from scratch on the
+       target endpoint, but bias column sampling toward features the RLM model
+       found informative (via `feature_weights`). No trees are inherited --
+       only a feature-selection prior from the source model.
     """)
     return
 
@@ -174,6 +179,43 @@ def _(average_precision_score, np, roc_auc_score, xgb):
         )
         return _model
 
+    def train_xgb_feature_transfer(
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
+        feature_weights: np.ndarray,
+    ) -> xgb.Booster:
+        """Train XGBoost from scratch with feature sampling biased by source model importances.
+
+        Uses the source model's feature importance (gain) as feature_weights
+        on the DMatrix, which biases colsample_bytree probability toward
+        features the source model found informative. No decision trees are
+        inherited -- only a feature-selection prior.
+
+        Args:
+            X_train: Training feature matrix.
+            y_train: Training labels.
+            X_val: Validation feature matrix.
+            y_val: Validation labels.
+            feature_weights: Per-feature weights from source model (e.g. gain importance).
+                Must be > 0 for all features.
+
+        Returns:
+            Trained XGBoost Booster.
+        """
+        _dtrain = xgb.DMatrix(X_train, label=y_train, feature_weights=feature_weights)
+        _dval = xgb.DMatrix(X_val, label=y_val, feature_weights=feature_weights)
+        _model = xgb.train(
+            XGB_PARAMS,
+            _dtrain,
+            num_boost_round=N_BOOST_ROUNDS,
+            evals=[(_dval, "val")],
+            early_stopping_rounds=EARLY_STOPPING_ROUNDS,
+            verbose_eval=False,
+        )
+        return _model
+
     def evaluate_model(model: xgb.Booster, X: np.ndarray, y: np.ndarray) -> dict:
         """Compute classification metrics for an XGBoost model."""
         _dtest = xgb.DMatrix(X)
@@ -193,6 +235,7 @@ def _(average_precision_score, np, roc_auc_score, xgb):
         N_BOOST_ROUNDS,
         XGB_PARAMS,
         evaluate_model,
+        train_xgb_feature_transfer,
         train_xgb_from_scratch,
         train_xgb_transfer,
     )
@@ -205,6 +248,7 @@ def _(
     XGB_PARAMS,
     fp_data: dict[str, dict],
     logger,
+    np,
     xgb,
 ):
     # Pre-train XGBoost on full RLM dataset
@@ -220,7 +264,25 @@ def _(
     logger.info(
         f"RLM pretrained model: {rlm_pretrained_model.num_boosted_rounds()} rounds"
     )
-    return (rlm_pretrained_model,)
+
+    # Extract feature importances (gain) for feature-transfer protocol.
+    # gain importance is sparse (only features that appear in at least one
+    # split have nonzero values). We add a small floor so every feature has
+    # a positive weight (required by DMatrix.feature_weights).
+    _gain_raw = rlm_pretrained_model.get_score(importance_type="gain")
+    _n_features = _X_rlm.shape[1]
+    rlm_feature_weights = np.ones(_n_features, dtype=np.float64)
+    for _fname, _gain in _gain_raw.items():
+        _idx = int(_fname.lstrip("f"))
+        rlm_feature_weights[_idx] = _gain
+    # Normalize to sum to 1 (cosmetic; XGBoost normalizes internally)
+    rlm_feature_weights = rlm_feature_weights / rlm_feature_weights.sum()
+    _nonzero = (rlm_feature_weights > (1.0 / _n_features)).sum()
+    logger.info(
+        f"RLM feature weights: {_nonzero}/{_n_features} features above uniform baseline"
+    )
+
+    return (rlm_feature_weights, rlm_pretrained_model)
 
 
 @app.cell(hide_code=True)
@@ -233,7 +295,9 @@ def _(
     fp_data: dict[str, dict],
     logger,
     pl,
+    rlm_feature_weights,
     rlm_pretrained_model,
+    train_xgb_feature_transfer,
     train_xgb_from_scratch,
     train_xgb_transfer,
 ):
@@ -272,7 +336,7 @@ def _(
                     }
                 )
 
-                # Transfer from RLM
+                # Decision-boundary transfer from RLM (continue boosting)
                 _model_transfer = train_xgb_transfer(
                     _X_train,
                     _y_train,
@@ -281,6 +345,34 @@ def _(
                     rlm_pretrained_model,
                 )
                 _metrics_transfer = evaluate_model(_model_transfer, _X_test, _y_test)
+                all_results.append(
+                    {
+                        "target": _target_name,
+                        "model": "XGBoost RLM-transfer",
+                        "replicate": _rep,
+                        "fold": _fold,
+                        **_metrics_transfer,
+                    }
+                )
+
+                # Feature-importance transfer from RLM (fresh trees, biased sampling)
+                _model_feat_transfer = train_xgb_feature_transfer(
+                    _X_train,
+                    _y_train,
+                    _X_test,
+                    _y_test,
+                    rlm_feature_weights,
+                )
+                _metrics_feat = evaluate_model(_model_feat_transfer, _X_test, _y_test)
+                all_results.append(
+                    {
+                        "target": _target_name,
+                        "model": "XGBoost RLM-feature-transfer",
+                        "replicate": _rep,
+                        "fold": _fold,
+                        **_metrics_feat,
+                    }
+                )
                 all_results.append(
                     {
                         "target": _target_name,
@@ -348,14 +440,23 @@ def _(mo, pl, results_df):
             x="model",
             y="avg_precision",
             ax=_axes_box[_i],
-            palette={"XGBoost scratch": "#FF5722", "XGBoost RLM-transfer": "#2196F3"},
+            palette={
+                "XGBoost scratch": "#FF5722",
+                "XGBoost RLM-transfer": "#2196F3",
+                "XGBoost RLM-feature-transfer": "#4CAF50",
+            },
+            order=[
+                "XGBoost scratch",
+                "XGBoost RLM-transfer",
+                "XGBoost RLM-feature-transfer",
+            ],
         )
         _axes_box[_i].set_title(_target)
         _axes_box[_i].set_xlabel("")
         _axes_box[_i].set_ylabel("AUC-PR" if _i == 0 else "")
         _axes_box[_i].tick_params(axis="x", rotation=15)
 
-    _fig_box.suptitle("XGBoost: From Scratch vs RLM Transfer (25 folds)", fontsize=14)
+    _fig_box.suptitle("XGBoost: Transfer Protocol Comparison (25 folds)", fontsize=14)
     plt.tight_layout()
     _fig_box.savefig(
         _FIGURES_DIR / "xgb-boxplots.png",

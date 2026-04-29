@@ -11,7 +11,7 @@ def _():
     mo.md("""
     # 06 — Combined Analysis and Discussion
 
-    Final comparison across all eight model variants with statistical testing.
+    Final comparison across all nine model variants with statistical testing.
     Generates separate Tukey HSD plots for HLM and PAMPA using AUC-PR as
     the primary metric, and saves them to docs/figures/.
     """)
@@ -128,6 +128,7 @@ def _(FIGURES_DIR, all_df, logger, mo, pl, plt, sns):
     _model_order = [
         "XGBoost scratch",
         "XGBoost RLM-transfer",
+        "XGBoost RLM-feature-transfer",
         "Chemprop scratch",
         "Chemprop RLM-transfer",
         "CheMeleon single-finetune",
@@ -138,9 +139,10 @@ def _(FIGURES_DIR, all_df, logger, mo, pl, plt, sns):
     _palette = {
         "XGBoost scratch": "#FF5722",
         "XGBoost RLM-transfer": "#FF9800",
+        "XGBoost RLM-feature-transfer": "#4CAF50",
         "Chemprop scratch": "#2196F3",
         "Chemprop RLM-transfer": "#03A9F4",
-        "CheMeleon single-finetune": "#4CAF50",
+        "CheMeleon single-finetune": "#66BB6A",
         "CheMeleon double-finetune": "#8BC34A",
         "CheMeleon frozen single": "#7E57C2",
         "CheMeleon frozen double": "#B39DDB",
@@ -235,7 +237,12 @@ def _(all_df, mo, pl, stats):
     # Transfer learning delta: for each fold, compute (transfer - scratch)
     _deltas = []
     _pairs = [
-        ("XGBoost scratch", "XGBoost RLM-transfer", "XGBoost"),
+        ("XGBoost scratch", "XGBoost RLM-transfer", "XGBoost (decision-boundary)"),
+        (
+            "XGBoost scratch",
+            "XGBoost RLM-feature-transfer",
+            "XGBoost (feature-importance)",
+        ),
         ("Chemprop scratch", "Chemprop RLM-transfer", "Chemprop"),
         (
             "CheMeleon single-finetune",
