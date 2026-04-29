@@ -164,7 +164,7 @@ To better understand what the models learned against the RLM and HLM targets, we
 
 *XGBoost: top 10 SHAP features before and after RLM transfer, aggregated across all 25 CV folds. Error bars = cross-fold standard deviation. Italic annotations = rank stability (how many of 25 folds each bit appeared in that model's top-10).*
 
-The scratch and transfer models share a stable core of top features: Bits 1171 (24/25 folds), 1722 (24/25), and 1088 (23/25) all push toward "stable" (blue) in the scratch model. These correspond to alkyl/alkenyl carbon environments -- saturated or low-electron-density fragments that lack CYP-vulnerable soft spots. RLM pre-training promotes Bit 1088 to the #1 position (25/25 folds) with roughly double the SHAP magnitude, suggesting this bit's substructure (a branched alkenyl chain) is consistently associated with metabolic stability across both datasets. Bits 1171 and 1722 remain highly ranked (25/25) in the transfer model but with similar absolute magnitudes -- consistent with them being features that the HLM data identifies independently. The transfer model also promotes several red (unstable-associated) features to the top-10: Bit 378 (24/25), Bit 1028 (21/25), and Bit 650 (13/25). These features, pushed toward "unstable" by RLM pre-training, correlate with the improved HLM performance -- they encode metabolic vulnerability patterns learned from the larger RLM dataset that the smaller HLM dataset alone could not surface as reliably.
+The scratch and transfer models share a stable core of top features: Bits 1171 (24/25 folds), 1722 (24/25), and 1088 (23/25) all push toward "stable" (blue) in the scratch model. These correspond to alkyl/alkenyl carbon environments -- saturated or low-electron-density fragments that lack CYP-vulnerable soft spots. RLM pre-training promotes Bit 1088 to the #1 position (25/25 folds) with roughly double the SHAP magnitude, suggesting this bit's substructure (a branched alkenyl chain) is consistently associated with metabolic stability across both datasets. Bits 1171 and 1722 remain highly ranked (25/25) in the transfer model but with similar absolute magnitudes -- consistent with them being features that the HLM data identifies independently of the RLM data. The transfer model also promotes several red (unstable-associated) features to the top-10: Bit 378 (24/25), Bit 1028 (21/25), and Bit 650 (13/25). These features, pushed toward "unstable" by RLM pre-training, correlate with the improved HLM performance -- they encode metabolic vulnerability patterns learned from the larger RLM dataset that the smaller HLM dataset alone could not surface as reliably.
 
 ![HLM Chemprop scratch vs transfer](docs/figures/hlm-chemprop-scratch-vs-transfer-aggregate.png)
 
@@ -241,7 +241,7 @@ Decision-boundary transfer is high-risk, high-reward: it carries directional ass
 
 ### What the models learn: how transfer changes feature importance
 
-What does a model *correctly* trained on PAMPA attend to, and how does transfer change that? Comparing scratch vs transfer variants across all 25 folds makes this visible:
+To understand *why* the XGBoost transfer model fails on PAMPA while Chemprop's does not, we can compare what each model attends to before and after transfer. The aggregate SHAP and saliency analysis across all 25 folds reveals where the inherited RLM knowledge helps, hurts, or gets ignored:
 
 ![PAMPA XGBoost scratch vs transfer](docs/figures/pampa-xgb-scratch-vs-transfer-aggregate.png)
 
