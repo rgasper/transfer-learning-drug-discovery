@@ -56,16 +56,16 @@ def _():
     TOP_K = 10
     return (
         CACHE_DIR,
+        Chem,
         DATA_DIR,
         FIGURES_DIR,
-        Chem,
         N_FOLDS,
         N_REPS,
         TOP_K,
+        average_precision_score,
         chemprop_data,
         defaultdict,
         featurizers,
-        json,
         lightning_pl,
         logger,
         models,
@@ -75,7 +75,6 @@ def _():
         shap,
         torch,
         xgb,
-        average_precision_score,
     )
 
 
@@ -110,7 +109,6 @@ def _(DATA_DIR, logger, np):
         f"HLM: {hlm_X.shape[0]}, PAMPA: {pampa_X.shape[0]}, RLM: {rlm_X.shape[0]}"
     )
     return (
-        global_fps,
         hlm_X,
         hlm_folds,
         hlm_labels,
@@ -123,11 +121,6 @@ def _(DATA_DIR, logger, np):
         rlm_labels,
         rlm_smiles,
     )
-
-
-# ---------------------------------------------------------------------------
-# XGBoost SHAP aggregation
-# ---------------------------------------------------------------------------
 
 
 @app.cell
@@ -287,11 +280,6 @@ def _(
         xgb_pampa_transfer_abs,
         xgb_pampa_transfer_signed,
     )
-
-
-# ---------------------------------------------------------------------------
-# Chemprop saliency aggregation
-# ---------------------------------------------------------------------------
 
 
 @app.cell
@@ -609,11 +597,6 @@ def _(
     )
 
 
-# ---------------------------------------------------------------------------
-# Aggregation helpers
-# ---------------------------------------------------------------------------
-
-
 @app.cell
 def _(N_FOLDS, N_REPS, TOP_K, np):
     """Define aggregation utilities used by the plotting cells."""
@@ -734,13 +717,7 @@ def _(N_FOLDS, N_REPS, TOP_K, np):
         }
 
     n_total_folds = N_REPS * N_FOLDS
-
     return aggregate_chemprop_saliency, aggregate_xgb_shap, n_total_folds
-
-
-# ---------------------------------------------------------------------------
-# XGBoost figures: HLM and PAMPA
-# ---------------------------------------------------------------------------
 
 
 @app.cell
@@ -934,11 +911,6 @@ def _(
         ]
     )
     return
-
-
-# ---------------------------------------------------------------------------
-# Chemprop figures: HLM and PAMPA
-# ---------------------------------------------------------------------------
 
 
 @app.cell
