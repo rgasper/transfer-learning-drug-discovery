@@ -250,7 +250,7 @@ An [ablation experiment](docs/xgb-transfer-ablation.md) confirms this damage to 
 
 Chemprop transfers at the representation level. When we load RLM-pretrained weights and replace the FFN head, the message-passing encoder retains learned molecular features while the decision layer is re-initialized from scratch. The encoder features (atom environments, functional group patterns, ring systems) are general enough to be useful for any molecular property, even if the specific property is unrelated. The new FFN head learns the correct mapping from these features to the target, unconstrained by old decision boundaries.
 
-This is the fundamental advantage of representation-level transfer: the features generalize even when the task does not.
+This is the fundamental advantage of representation-level transfer: the features generalize even when the task does not, and to new molecules which share common substructures / functional groups as the pre-trained dataset.
 
 ---
 
