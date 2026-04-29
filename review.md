@@ -8,7 +8,7 @@ Overall, this is a well-structured and clearly narrated piece of applied ML work
 
 **The "representation transfer vs. decision-boundary transfer" thesis is overstated relative to the evidence.**
 
-- resolution in progress
+- resolved!
 
 The core claim is that the *architectural difference* (where knowledge lives) is what causes the divergent transfer outcomes. But the experiment confounds architecture with transfer mechanism. XGBoost's transfer continues boosting (no parameter is ever discarded), while Chemprop's transfer *replaces the FFN head*. The comparison is not purely "trees vs. GNN" -- it's "continue the old model vs. reset the decision layer." You could construct an XGBoost transfer strategy that discards the source trees entirely and only uses the source model's feature importances to guide new tree construction, or you could retrain a new XGBoost from scratch using features derived from the source model. None of that is tested. The claim should be scoped to "this specific transfer protocol for XGBoost" rather than "gradient-boosted trees as an architecture class." The README occasionally gets this right (e.g., "decision-boundary transfer") but the synthesis and conclusions slip into making it about the architecture itself.
 
@@ -38,7 +38,7 @@ As noted above, the experiment doesn't test whether XGBoost could benefit from r
 
 **The data efficiency experiment only tests RLM.**
 
-- resolution in progress
+- resolved!
 
 The data efficiency curves are shown only for RLM. The argument that "CheMeleon frozen dominates at every data fraction from 10% onward" is specific to that endpoint. Given that HLM and PAMPA have different characteristics (size, class balance, chemical diversity), the generalizability claim would be stronger with data efficiency curves for all three endpoints.
 
