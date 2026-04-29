@@ -95,12 +95,7 @@ def _(CHECKPOINTS_DIR, DATA_DIR, logger, np, torch):
     chemeleon_mp_state = _cm_data["state_dict"]
 
     logger.info(f"CV: {split_config['n_replicates']}x{split_config['n_folds']}")
-    return (
-        chemeleon_mp_params,
-        chemeleon_mp_state,
-        endpoint_data,
-        split_config,
-    )
+    return chemeleon_mp_params, chemeleon_mp_state, endpoint_data, split_config
 
 
 @app.cell

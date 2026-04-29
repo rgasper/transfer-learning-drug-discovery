@@ -281,8 +281,7 @@ def _(
     logger.info(
         f"RLM feature weights: {_nonzero}/{_n_features} features above uniform baseline"
     )
-
-    return (rlm_feature_weights, rlm_pretrained_model)
+    return rlm_feature_weights, rlm_pretrained_model
 
 
 @app.cell(hide_code=True)
