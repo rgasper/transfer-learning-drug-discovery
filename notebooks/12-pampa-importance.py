@@ -11,6 +11,10 @@ def _():
     mo.md("""
     # 12 — PAMPA Feature Importance: XGBoost SHAP + Chemprop Saliency
 
+    **Note:** This notebook computes single-fold exploratory analysis
+    (rep 0, fold 0 only). For the cross-fold aggregate figures used in the
+    README, see **notebook 16** (`16-aggregate-importance.py`).
+
     Computes feature importance for PAMPA pH 7.4 predictions using both
     XGBoost (SHAP on Morgan fingerprint bits) and Chemprop (per-atom
     gradient saliency). Produces a combined figure showing what structural

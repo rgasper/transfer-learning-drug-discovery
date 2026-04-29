@@ -11,6 +11,10 @@ def _():
     mo.md("""
     # 10 — HLM Feature Importance: XGBoost SHAP + Chemprop Saliency
 
+    **Note:** This notebook computes single-fold exploratory analysis
+    (rep 0, fold 0 only). For the cross-fold aggregate figures used in the
+    README, see **notebook 16** (`16-aggregate-importance.py`).
+
     Computes feature importance for HLM Stability predictions using both
     XGBoost (SHAP on Morgan fingerprint bits) and Chemprop (per-atom
     gradient saliency). Produces a single combined figure showing what

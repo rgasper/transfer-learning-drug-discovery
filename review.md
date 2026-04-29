@@ -20,6 +20,8 @@ On PAMPA, Chemprop RLM-transfer scores 0.925 vs. scratch 0.917 -- a +0.008 delta
 
 **The SHAP / saliency analysis is presented with more causal confidence than it supports.**
 
+- resolution in progress
+
 Throughout both stories, feature importance shifts between scratch and transfer models are interpreted as causal explanations ("RLM pre-training *elevated* sulfur environments," "the transfer model *over-relies* on nitrogen-heterocycle signals"). Feature importance methods show correlation between features and predictions, not causal mechanisms. More importantly, these are single-fold snapshots with an explicit caveat that "rankings may vary with different test sets" -- yet the narrative builds substantive chemical arguments on them. How stable are these rankings across the 25 folds? If Bit 1088 is #1 in one fold but #15 in another, the story about RLM "amplifying shared metabolic-stability features" collapses. Presenting aggregate feature importance (e.g., mean absolute SHAP across folds) would substantially strengthen these claims.
 
 **The "shared structural rules" claim in Story 1 rests on a weak foundation.**
