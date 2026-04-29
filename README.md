@@ -107,7 +107,7 @@ The datasets share only 5.6% of molecules and 12.9% of scaffolds:
 |---|---|---|---|---|
 | RLM ∩ HLM | 50 | 5.6% | 94 | 12.9% |
 
-This minimal overlap in the chemical matter means that if transfer helps, the models must be learning *structural rules* governing metabolic stability -- not memorizing specific molecules from the source dataset.
+The molecule overlap is small (5.6%), but the scaffold overlap (12.9%) is non-trivial. If transfer helps, it likely reflects a combination of learned structural rules governing metabolic stability and direct familiarity with related scaffolds seen during RLM training. The low molecule overlap rules out simple memorization of shared compounds, but the scaffold overlap means we cannot attribute the benefit entirely to generalized structural knowledge.
 
 ### Results across all architectures
 
@@ -150,13 +150,13 @@ Key pairwise comparisons (Tukey HSD, FWER = 0.05):
 - Chemprop RLM-transfer vs XGBoost scratch: significant (p < 0.001).
   Largest gap.
 
-### What the models learn: shared structural rules
+### What the models learn: interpreting the transfer benefit
 
-The RLM vs HLM correlation on their 27 shared uncensored compounds is weak (Pearson r=0.54 on n=27), suggesting the transfer benefit does not come from information about specific shared compounds. Rather, the models learn which *types* of substructures make a molecule metabolically vulnerable -- knowledge that transfers across species because the underlying enzymatic chemistry is conserved.
+The RLM vs HLM correlation on their 27 shared uncensored compounds is moderate (Pearson r=0.54), but n=27 is far too small for a reliable estimate -- the 95% CI via Fisher z-transform spans roughly 0.20 to 0.76, so the true correlation could be anywhere from weak to strong. This means we cannot draw firm conclusions about whether the shared compounds carry useful signal. Additionally, the datasets share 12.9% of Murcko scaffolds (94 scaffolds), which is not trivially small -- some of the transfer benefit could come from the model having seen structurally related scaffolds in the RLM source data, even without seeing the same molecules. We therefore cannot attribute the transfer benefit solely to learned structural rules; scaffold familiarity may contribute. That said, the bulk of the HLM test set (87% of scaffolds) consists of scaffolds unseen during RLM training, and the SHAP analysis below suggests the transfer model learns generalizable substructure-activity patterns rather than memorizing specific scaffolds. The most parsimonious interpretation is that both mechanisms likely contribute: shared scaffolds provide a direct advantage for related compounds, while the broader structural rules about metabolic vulnerability transfer more generally.
 
 ![RLM vs HLM correlation](docs/figures/eda-correlation-rlm-hlm.png)
 
-*Scatter of continuous endpoint values for the 27 compounds shared between RLM and HLM (uncensored in both). Weak correlation (r=0.54) despite shared biochemistry -- transfer benefit comes from structural rules, not shared data points.*
+*Scatter of continuous endpoint values for the 27 compounds shared between RLM and HLM (uncensored in both). Moderate correlation (r=0.54, 95% CI: 0.20--0.76), but n=27 is too small to interpret reliably.*
 
 To better understand what the models learned against the RLM and HLM targets, we computed feature importance for both architectures across all 25 CV folds and compared how they shift with transfer:
 

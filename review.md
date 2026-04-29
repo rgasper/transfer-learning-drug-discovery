@@ -26,6 +26,8 @@ Throughout both stories, feature importance shifts between scratch and transfer 
 
 **The "shared structural rules" claim in Story 1 rests on a weak foundation.**
 
+- resolved: reframed the claim. Added Fisher z-transform 95% CI (0.20--0.76) for the r=0.54 on n=27 to make explicit how uninformative the correlation is. Acknowledged that 12.9% scaffold overlap is non-trivial and could contribute to transfer benefit. Rewrote both the setup paragraph and the "shared structural rules" subsection (now "interpreting the transfer benefit") to present structural-rules as one plausible mechanism alongside scaffold familiarity, rather than the sole explanation. Updated figure caption accordingly.
+
 The argument that transfer benefit comes from structural rules rather than shared data points cites the weak Pearson r=0.54 on n=27 shared compounds. But n=27 is too small for a correlation to be meaningful either way. More importantly, the datasets share 12.9% of scaffolds -- this is not trivially small. Some of the transfer benefit could come from seeing related scaffolds in the source data. The text dismisses this possibility too quickly.
 
 ---
@@ -37,6 +39,8 @@ The argument that transfer benefit comes from structural rules rather than share
 A critical missing experiment: what happens if you pre-train XGBoost on *random labels* for the same molecules? If XGBoost-random-pretrain also collapses on PAMPA, the claim that the failure is about *wrong* decision boundaries is weakened -- it might just be that *any* additional trees degrade the model when the original signal was noise. If XGBoost-random-pretrain performs *differently* from XGBoost-RLM-pretrain, that tells you something about the specific content of the inherited decisions vs. the structural problem of having extra trees.
 
 **No "retrain XGBoost from scratch using RLM-derived features" control.**
+
+- resolved
 
 As noted above, the experiment doesn't test whether XGBoost could benefit from representation-level transfer if given the opportunity. For instance, training an XGBoost on learned D-MPNN features (extracted from an RLM-pretrained encoder) instead of Morgan fingerprints would isolate the feature vs. decision boundary question more cleanly.
 
