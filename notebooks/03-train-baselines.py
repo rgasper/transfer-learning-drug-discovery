@@ -373,15 +373,6 @@ def _(
                         **_metrics_feat,
                     }
                 )
-                all_results.append(
-                    {
-                        "target": _target_name,
-                        "model": "XGBoost RLM-transfer",
-                        "replicate": _rep,
-                        "fold": _fold,
-                        **_metrics_transfer,
-                    }
-                )
 
         logger.info(f"  Completed {N_REPLICATES * N_FOLDS} folds for {_target_name}")
 
