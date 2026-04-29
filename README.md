@@ -1,6 +1,6 @@
 # Transfer Learning for Drug Discovery: NCATS ADME
 
-This document (and codebase) explores a practical question: does transfer learning help for ADME prediction (yes), and does it matter what kind of model you use (yes), and why?
+This document (and codebase) explores a practical question: does transfer learning help for ADME prediction (yes), and does it matter what model type you use and how you perform that knowlege transfer (yes), and why?
 
 Predicting how a drug candidate behaves in the body -- whether it's absorbed, how quickly the liver breaks it down, whether it crosses cell membranes -- is central to drug discovery. Machine learning models can learn these predictions from experimental data, but experimental data is expensive and scarce. A typical ADME assay might produce a few hundred to a few thousand measurements.
 
