@@ -605,11 +605,6 @@ def _(
     )
 
 
-# ---------------------------------------------------------------------------
-# Exemplar molecules for substructure images
-# ---------------------------------------------------------------------------
-
-
 @app.cell
 def _(Chem, hlm_smiles, logger, pampa_smiles, rdFingerprintGenerator):
     """Build bit-to-mol-info dicts and atom-type-to-mol dicts for drawing.
