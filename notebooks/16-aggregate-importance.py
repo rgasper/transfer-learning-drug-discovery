@@ -28,6 +28,7 @@ def _():
 
 @app.cell
 def _():
+    import io
     import json
     from collections import defaultdict
     from pathlib import Path
@@ -39,7 +40,10 @@ def _():
     import xgboost as xgb
     from lightning import pytorch as lightning_pl
     from loguru import logger
+    from PIL import Image
     from rdkit import Chem
+    from rdkit.Chem import rdFingerprintGenerator
+    from rdkit.Chem.Draw import rdMolDraw2D
     from sklearn.metrics import average_precision_score
 
     from chemprop import data as chemprop_data
@@ -59,6 +63,7 @@ def _():
         Chem,
         DATA_DIR,
         FIGURES_DIR,
+        Image,
         N_FOLDS,
         N_REPS,
         TOP_K,
@@ -66,12 +71,15 @@ def _():
         chemprop_data,
         defaultdict,
         featurizers,
+        io,
         lightning_pl,
         logger,
         models,
         nn,
         np,
         plt,
+        rdFingerprintGenerator,
+        rdMolDraw2D,
         shap,
         torch,
         xgb,
@@ -597,6 +605,92 @@ def _(
     )
 
 
+# ---------------------------------------------------------------------------
+# Exemplar molecules for substructure images
+# ---------------------------------------------------------------------------
+
+
+@app.cell
+def _(Chem, hlm_smiles, logger, pampa_smiles, rdFingerprintGenerator):
+    """Build bit-to-mol-info dicts and atom-type-to-mol dicts for drawing.
+
+    Scans all molecules in each dataset to find a representative molecule
+    for each Morgan fingerprint bit (XGBoost images) and each atom type
+    (Chemprop images). These exemplars are used purely for illustration --
+    the aggregate importance values come from the cross-fold computation.
+    """
+    _gen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
+
+    def _build_bit_to_mol_info(smiles_list):
+        """For each Morgan bit, store (mol, center_atom, radius) from the
+        first molecule that activates it.
+
+        Args:
+            smiles_list: List of SMILES strings.
+
+        Returns:
+            Dict mapping bit index to (RDKit Mol, center_atom_idx, radius).
+        """
+        _bit_to_mol = {}
+        for _smi in smiles_list:
+            _mol = Chem.MolFromSmiles(_smi)
+            if _mol is None:
+                continue
+            _ao = rdFingerprintGenerator.AdditionalOutput()
+            _ao.AllocateBitInfoMap()
+            _gen.GetFingerprint(_mol, additionalOutput=_ao)
+            _bit_info = _ao.GetBitInfoMap()
+            for _bit, _envs in _bit_info.items():
+                if _bit not in _bit_to_mol:
+                    _center, _rad = _envs[0]
+                    _bit_to_mol[_bit] = (_mol, _center, _rad)
+        return _bit_to_mol
+
+    def _build_atom_type_to_mol(smiles_list):
+        """For each atom type key, store (mol, atom_idx) from the first
+        molecule that contains it.
+
+        Args:
+            smiles_list: List of SMILES strings.
+
+        Returns:
+            Dict mapping atom-type key string to (RDKit Mol, atom_idx).
+        """
+        _atype_to_mol = {}
+        for _smi in smiles_list:
+            _mol = Chem.MolFromSmiles(_smi)
+            if _mol is None:
+                continue
+            for _a in range(_mol.GetNumAtoms()):
+                _atom = _mol.GetAtomWithIdx(_a)
+                _key = (
+                    f"{_atom.GetSymbol()}"
+                    f"{'(arom)' if _atom.GetIsAromatic() else ''}"
+                    f" deg{_atom.GetDegree()}"
+                )
+                if _key not in _atype_to_mol:
+                    _atype_to_mol[_key] = (_mol, _a)
+        return _atype_to_mol
+
+    hlm_bit_to_mol = _build_bit_to_mol_info(hlm_smiles)
+    pampa_bit_to_mol = _build_bit_to_mol_info(pampa_smiles)
+    hlm_atype_to_mol = _build_atom_type_to_mol(hlm_smiles)
+    pampa_atype_to_mol = _build_atom_type_to_mol(pampa_smiles)
+
+    logger.info(
+        f"Exemplars: HLM bits={len(hlm_bit_to_mol)}, "
+        f"PAMPA bits={len(pampa_bit_to_mol)}, "
+        f"HLM atypes={len(hlm_atype_to_mol)}, "
+        f"PAMPA atypes={len(pampa_atype_to_mol)}"
+    )
+    return (
+        hlm_atype_to_mol,
+        hlm_bit_to_mol,
+        pampa_atype_to_mol,
+        pampa_bit_to_mol,
+    )
+
+
 @app.cell
 def _(N_FOLDS, N_REPS, TOP_K, np):
     """Define aggregation utilities used by the plotting cells."""
@@ -722,13 +816,19 @@ def _(N_FOLDS, N_REPS, TOP_K, np):
 
 @app.cell
 def _(
+    Chem,
     FIGURES_DIR,
+    Image,
     aggregate_xgb_shap,
+    hlm_bit_to_mol,
+    io,
     logger,
     mo,
     n_total_folds,
     np,
+    pampa_bit_to_mol,
     plt,
+    rdMolDraw2D,
     xgb_hlm_scratch_abs,
     xgb_hlm_scratch_signed,
     xgb_hlm_transfer_abs,
@@ -740,19 +840,62 @@ def _(
 ):
     """Plot XGBoost SHAP: scratch vs transfer for HLM and PAMPA."""
 
+    def _draw_neighborhood_xgb(mol, center_atom, radius, size=(220, 160)):
+        _effective_radius = max(radius, 2)
+        _env = Chem.FindAtomEnvironmentOfRadiusN(mol, _effective_radius, center_atom)
+        if not _env:
+            _env = Chem.FindAtomEnvironmentOfRadiusN(mol, 1, center_atom)
+        if not _env:
+            _atom = mol.GetAtomWithIdx(center_atom)
+            _frag = Chem.MolFromSmiles(f"[{_atom.GetSymbol()}]")
+            if _frag is None:
+                return None
+            _d = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
+            _d.drawOptions().bondLineWidth = 2.0
+            _d.drawOptions().minFontSize = 16
+            _d.DrawMolecule(_frag)
+            _d.FinishDrawing()
+            return Image.open(io.BytesIO(_d.GetDrawingText()))
+        _amap = {}
+        _submol = Chem.PathToSubmol(mol, _env, atomMap=_amap)
+        if _submol is None or _submol.GetNumAtoms() == 0:
+            return None
+        _center_in_sub = _amap.get(center_atom, -1)
+        _highlight_atoms = list(range(_submol.GetNumAtoms()))
+        _atom_colors = {a: (0.92, 0.92, 0.92, 1.0) for a in _highlight_atoms}
+        if _center_in_sub >= 0:
+            _atom_colors[_center_in_sub] = (0.4, 0.65, 0.9, 0.5)
+        _atom_radii = {a: 0.3 for a in _highlight_atoms}
+        if _center_in_sub >= 0:
+            _atom_radii[_center_in_sub] = 0.4
+        _d = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
+        _d.drawOptions().bondLineWidth = 2.0
+        _d.drawOptions().minFontSize = 14
+        _d.drawOptions().padding = 0.15
+        _d.DrawMolecule(
+            _submol,
+            highlightAtoms=_highlight_atoms,
+            highlightAtomColors=_atom_colors,
+            highlightAtomRadii=_atom_radii,
+        )
+        _d.FinishDrawing()
+        return Image.open(io.BytesIO(_d.GetDrawingText()))
+
     def _plot_xgb_comparison(
         agg_scratch,
         agg_transfer,
+        bit_to_mol,
         endpoint,
         label_pos,
         label_neg,
         save_name,
     ):
-        """Draw side-by-side XGBoost SHAP bars with rank-stability annotations.
+        """Draw 4-column XGBoost SHAP figure: images | bars | bars | images.
 
         Args:
             agg_scratch: Aggregated scratch results from aggregate_xgb_shap.
             agg_transfer: Aggregated transfer results from aggregate_xgb_shap.
+            bit_to_mol: Dict mapping bit index to (mol, center_atom, radius).
             endpoint: Name string (e.g. 'HLM Stability').
             label_pos: Label for positive SHAP direction (e.g. 'stable').
             label_neg: Label for negative SHAP direction (e.g. 'unstable').
@@ -760,30 +903,58 @@ def _(
         """
         _top_s = agg_scratch["top_bits"]
         _top_t = agg_transfer["top_bits"]
-        _n_s = len(_top_s)
-        _n_t = len(_top_t)
+        _n_left = len(_top_s)
+        _n_right = len(_top_t)
 
-        _fig, (_ax_l, _ax_r) = plt.subplots(1, 2, figsize=(16, 7), sharey=False)
+        _fig = plt.figure(figsize=(22, 8))
+        _gs = _fig.add_gridspec(
+            1,
+            4,
+            width_ratios=[0.3, 0.7, 0.7, 0.3],
+            wspace=0.08,
+        )
 
-        # --- Scratch panel ---
-        _vals_s = [float(agg_scratch["grand_mean_abs"][b]) for b in _top_s]
-        _errs_s = [float(agg_scratch["grand_std_abs"][b]) for b in _top_s]
-        _colors_s = [
+        # --- Left images (scratch) ---
+        _ax_img_l = _fig.add_subplot(_gs[0])
+        _ax_img_l.set_xlim(0, 1)
+        _ax_img_l.set_ylim(-0.5, _n_left - 0.5)
+        _ax_img_l.invert_yaxis()
+        _ax_img_l.axis("off")
+        for _j, _bit in enumerate(_top_s):
+            if int(_bit) in bit_to_mol:
+                _mol, _center, _rad = bit_to_mol[int(_bit)]
+                try:
+                    _img = _draw_neighborhood_xgb(_mol, _center, _rad)
+                    if _img:
+                        _inset = _ax_img_l.inset_axes(
+                            [0.0, (_n_left - 1 - _j) / _n_left, 1.0, 0.9 / _n_left],
+                            transform=_ax_img_l.transAxes,
+                        )
+                        _inset.imshow(_img)
+                        _inset.axis("off")
+                except Exception:
+                    pass
+
+        # --- Left bars (scratch) ---
+        _ax_l = _fig.add_subplot(_gs[1])
+        _vals_l = [float(agg_scratch["grand_mean_abs"][b]) for b in _top_s]
+        _errs_l = [float(agg_scratch["grand_std_abs"][b]) for b in _top_s]
+        _colors_l = [
             "#2196F3" if agg_scratch["grand_mean_signed"][b] > 0 else "#FF5722"
             for b in _top_s
         ]
-        _y_pos_s = np.arange(_n_s)
-        _bars_s = _ax_l.barh(
-            _y_pos_s,
-            _vals_s,
-            xerr=_errs_s,
-            color=_colors_s,
+        _y_pos_l = np.arange(_n_left)
+        _ax_l.barh(
+            _y_pos_l,
+            _vals_l,
+            xerr=_errs_l,
+            color=_colors_l,
             alpha=0.8,
             height=0.7,
             capsize=3,
             edgecolor="none",
         )
-        _ax_l.set_yticks(_y_pos_s)
+        _ax_l.set_yticks(_y_pos_l)
         _ax_l.set_yticklabels([f"Bit {b}" for b in _top_s], fontsize=9)
         _ax_l.set_xlabel("Mean |SHAP| across 25 folds", fontsize=11)
         _ax_l.set_title(
@@ -798,7 +969,7 @@ def _(
             _count = agg_scratch["rank_stability"][int(_bit)]
             _ax_l.annotate(
                 f"{_count}/{n_total_folds}",
-                xy=(_vals_s[_j] + _errs_s[_j], _j),
+                xy=(_vals_l[_j] + _errs_l[_j], _j),
                 xytext=(4, 0),
                 textcoords="offset points",
                 fontsize=8,
@@ -807,25 +978,26 @@ def _(
                 fontstyle="italic",
             )
 
-        # --- Transfer panel ---
-        _vals_t = [float(agg_transfer["grand_mean_abs"][b]) for b in _top_t]
-        _errs_t = [float(agg_transfer["grand_std_abs"][b]) for b in _top_t]
-        _colors_t = [
+        # --- Right bars (transfer) ---
+        _ax_r = _fig.add_subplot(_gs[2])
+        _vals_r = [float(agg_transfer["grand_mean_abs"][b]) for b in _top_t]
+        _errs_r = [float(agg_transfer["grand_std_abs"][b]) for b in _top_t]
+        _colors_r = [
             "#2196F3" if agg_transfer["grand_mean_signed"][b] > 0 else "#FF5722"
             for b in _top_t
         ]
-        _y_pos_t = np.arange(_n_t)
-        _bars_t = _ax_r.barh(
-            _y_pos_t,
-            _vals_t,
-            xerr=_errs_t,
-            color=_colors_t,
+        _y_pos_r = np.arange(_n_right)
+        _ax_r.barh(
+            _y_pos_r,
+            _vals_r,
+            xerr=_errs_r,
+            color=_colors_r,
             alpha=0.8,
             height=0.7,
             capsize=3,
             edgecolor="none",
         )
-        _ax_r.set_yticks(_y_pos_t)
+        _ax_r.set_yticks(_y_pos_r)
         _ax_r.set_yticklabels([f"Bit {b}" for b in _top_t], fontsize=9)
         _ax_r.yaxis.tick_right()
         _ax_r.yaxis.set_label_position("right")
@@ -841,7 +1013,7 @@ def _(
             _count = agg_transfer["rank_stability"][int(_bit)]
             _ax_r.annotate(
                 f"{_count}/{n_total_folds}",
-                xy=(_vals_t[_j] + _errs_t[_j], _j),
+                xy=(_vals_r[_j] + _errs_r[_j], _j),
                 xytext=(4, 0),
                 textcoords="offset points",
                 fontsize=8,
@@ -849,6 +1021,32 @@ def _(
                 va="center",
                 fontstyle="italic",
             )
+
+        # --- Right images (transfer) ---
+        _ax_img_r = _fig.add_subplot(_gs[3])
+        _ax_img_r.set_xlim(0, 1)
+        _ax_img_r.set_ylim(-0.5, _n_right - 0.5)
+        _ax_img_r.invert_yaxis()
+        _ax_img_r.axis("off")
+        for _j, _bit in enumerate(_top_t):
+            if int(_bit) in bit_to_mol:
+                _mol, _center, _rad = bit_to_mol[int(_bit)]
+                try:
+                    _img = _draw_neighborhood_xgb(_mol, _center, _rad)
+                    if _img:
+                        _inset = _ax_img_r.inset_axes(
+                            [
+                                0.15,
+                                (_n_right - 1 - _j) / _n_right,
+                                0.85,
+                                0.9 / _n_right,
+                            ],
+                            transform=_ax_img_r.transAxes,
+                        )
+                        _inset.imshow(_img)
+                        _inset.axis("off")
+                except Exception:
+                    pass
 
         _fig.suptitle(
             f"{endpoint}: XGBoost Scratch vs RLM-Transfer (SHAP, 25-fold aggregate)",
@@ -874,6 +1072,7 @@ def _(
     _fig_hlm = _plot_xgb_comparison(
         _agg_hlm_s,
         _agg_hlm_t,
+        hlm_bit_to_mol,
         "HLM Stability",
         "stable",
         "unstable",
@@ -882,6 +1081,7 @@ def _(
     _fig_pampa = _plot_xgb_comparison(
         _agg_pampa_s,
         _agg_pampa_t,
+        pampa_bit_to_mol,
         "PAMPA pH 7.4",
         "permeable",
         "impermeable",
@@ -902,7 +1102,8 @@ def _(
             mo.md("""
     Mean |SHAP| across all 25 CV folds, with cross-fold standard deviation
     as error bars. Italic annotations show rank stability: how many of the
-    25 folds each bit appeared in that model's top-10.
+    25 folds each bit appeared in that model's top-10. Substructure images
+    show the Morgan radius-3 neighborhood that activates each bit.
             """),
             mo.md("### HLM Stability"),
             mo.as_html(_fig_hlm),
@@ -915,56 +1116,131 @@ def _(
 
 @app.cell
 def _(
+    Chem,
     FIGURES_DIR,
+    Image,
     aggregate_chemprop_saliency,
     cp_hlm_scratch_folds,
     cp_hlm_transfer_folds,
     cp_pampa_scratch_folds,
     cp_pampa_transfer_folds,
+    hlm_atype_to_mol,
+    io,
     logger,
     mo,
     n_total_folds,
     np,
+    pampa_atype_to_mol,
     plt,
+    rdMolDraw2D,
 ):
     """Plot Chemprop saliency: scratch vs transfer for HLM and PAMPA."""
+
+    def _draw_neighborhood_cp(mol, center_atom, radius, size=(220, 160)):
+        _effective_radius = max(radius, 1)
+        _env = Chem.FindAtomEnvironmentOfRadiusN(mol, _effective_radius, center_atom)
+        if not _env:
+            _atom = mol.GetAtomWithIdx(center_atom)
+            _frag = Chem.MolFromSmiles(f"[{_atom.GetSymbol()}]")
+            if _frag is None:
+                return None
+            _d = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
+            _d.drawOptions().bondLineWidth = 2.0
+            _d.drawOptions().minFontSize = 16
+            _d.DrawMolecule(_frag)
+            _d.FinishDrawing()
+            return Image.open(io.BytesIO(_d.GetDrawingText()))
+        _amap = {}
+        _submol = Chem.PathToSubmol(mol, _env, atomMap=_amap)
+        if _submol is None or _submol.GetNumAtoms() == 0:
+            return None
+        _center_in_sub = _amap.get(center_atom, -1)
+        _highlight_atoms = list(range(_submol.GetNumAtoms()))
+        _atom_colors = {a: (0.92, 0.92, 0.92, 1.0) for a in _highlight_atoms}
+        if _center_in_sub >= 0:
+            _atom_colors[_center_in_sub] = (0.4, 0.65, 0.9, 0.5)
+        _atom_radii = {a: 0.3 for a in _highlight_atoms}
+        if _center_in_sub >= 0:
+            _atom_radii[_center_in_sub] = 0.4
+        _d = rdMolDraw2D.MolDraw2DCairo(size[0], size[1])
+        _d.drawOptions().bondLineWidth = 2.0
+        _d.drawOptions().minFontSize = 14
+        _d.drawOptions().padding = 0.15
+        _d.DrawMolecule(
+            _submol,
+            highlightAtoms=_highlight_atoms,
+            highlightAtomColors=_atom_colors,
+            highlightAtomRadii=_atom_radii,
+        )
+        _d.FinishDrawing()
+        return Image.open(io.BytesIO(_d.GetDrawingText()))
 
     def _plot_chemprop_comparison(
         agg_scratch,
         agg_transfer,
+        atype_to_mol,
         endpoint,
         save_name,
     ):
-        """Draw side-by-side Chemprop saliency bars with rank-stability annotations.
+        """Draw 4-column Chemprop saliency figure: images | bars | bars | images.
 
         Args:
             agg_scratch: Aggregated scratch results from aggregate_chemprop_saliency.
             agg_transfer: Aggregated transfer results.
+            atype_to_mol: Dict mapping atom-type key to (mol, atom_idx).
             endpoint: Name string (e.g. 'HLM Stability').
             save_name: Filename stem for saving.
         """
         _top_s = agg_scratch["top_types"]
         _top_t = agg_transfer["top_types"]
-        _n_s = len(_top_s)
-        _n_t = len(_top_t)
+        _n_left = len(_top_s)
+        _n_right = len(_top_t)
 
-        _fig, (_ax_l, _ax_r) = plt.subplots(1, 2, figsize=(16, 7), sharey=False)
+        _fig = plt.figure(figsize=(22, 8))
+        _gs = _fig.add_gridspec(
+            1,
+            4,
+            width_ratios=[0.3, 0.7, 0.7, 0.3],
+            wspace=0.08,
+        )
 
-        # --- Scratch panel ---
-        _means_s = [agg_scratch["grand_means"][k] for k in _top_s]
-        _stds_s = [agg_scratch["grand_stds"][k] for k in _top_s]
-        _y_pos_s = np.arange(_n_s)
+        # --- Left images (scratch) ---
+        _ax_img_l = _fig.add_subplot(_gs[0])
+        _ax_img_l.set_xlim(0, 1)
+        _ax_img_l.set_ylim(-0.5, _n_left - 0.5)
+        _ax_img_l.invert_yaxis()
+        _ax_img_l.axis("off")
+        for _j, _atype in enumerate(_top_s):
+            if _atype in atype_to_mol:
+                _mol, _idx = atype_to_mol[_atype]
+                try:
+                    _img = _draw_neighborhood_cp(_mol, _idx, 1)
+                    if _img:
+                        _inset = _ax_img_l.inset_axes(
+                            [0.0, (_n_left - 1 - _j) / _n_left, 1.0, 0.9 / _n_left],
+                            transform=_ax_img_l.transAxes,
+                        )
+                        _inset.imshow(_img)
+                        _inset.axis("off")
+                except Exception:
+                    pass
+
+        # --- Left bars (scratch) ---
+        _ax_l = _fig.add_subplot(_gs[1])
+        _means_l = [agg_scratch["grand_means"][k] for k in _top_s]
+        _stds_l = [agg_scratch["grand_stds"][k] for k in _top_s]
+        _y_pos_l = np.arange(_n_left)
         _ax_l.barh(
-            _y_pos_s,
-            _means_s,
-            xerr=_stds_s,
+            _y_pos_l,
+            _means_l,
+            xerr=_stds_l,
             color="#7E57C2",
             alpha=0.8,
             height=0.7,
             capsize=3,
             edgecolor="none",
         )
-        _ax_l.set_yticks(_y_pos_s)
+        _ax_l.set_yticks(_y_pos_l)
         _ax_l.set_yticklabels(_top_s, fontsize=9)
         _ax_l.set_xlabel("Mean normalized saliency across 25 folds", fontsize=11)
         _ax_l.set_title("Chemprop Scratch", fontsize=12, fontweight="bold")
@@ -974,7 +1250,7 @@ def _(
             _count = agg_scratch["rank_stability"][_atype]
             _ax_l.annotate(
                 f"{_count}/{n_total_folds}",
-                xy=(_means_s[_j] + _stds_s[_j], _j),
+                xy=(_means_l[_j] + _stds_l[_j], _j),
                 xytext=(4, 0),
                 textcoords="offset points",
                 fontsize=8,
@@ -983,21 +1259,22 @@ def _(
                 fontstyle="italic",
             )
 
-        # --- Transfer panel ---
-        _means_t = [agg_transfer["grand_means"][k] for k in _top_t]
-        _stds_t = [agg_transfer["grand_stds"][k] for k in _top_t]
-        _y_pos_t = np.arange(_n_t)
+        # --- Right bars (transfer) ---
+        _ax_r = _fig.add_subplot(_gs[2])
+        _means_r = [agg_transfer["grand_means"][k] for k in _top_t]
+        _stds_r = [agg_transfer["grand_stds"][k] for k in _top_t]
+        _y_pos_r = np.arange(_n_right)
         _ax_r.barh(
-            _y_pos_t,
-            _means_t,
-            xerr=_stds_t,
+            _y_pos_r,
+            _means_r,
+            xerr=_stds_r,
             color="#00897B",
             alpha=0.8,
             height=0.7,
             capsize=3,
             edgecolor="none",
         )
-        _ax_r.set_yticks(_y_pos_t)
+        _ax_r.set_yticks(_y_pos_r)
         _ax_r.set_yticklabels(_top_t, fontsize=9)
         _ax_r.yaxis.tick_right()
         _ax_r.yaxis.set_label_position("right")
@@ -1009,7 +1286,7 @@ def _(
             _count = agg_transfer["rank_stability"][_atype]
             _ax_r.annotate(
                 f"{_count}/{n_total_folds}",
-                xy=(_means_t[_j] + _stds_t[_j], _j),
+                xy=(_means_r[_j] + _stds_r[_j], _j),
                 xytext=(4, 0),
                 textcoords="offset points",
                 fontsize=8,
@@ -1017,6 +1294,32 @@ def _(
                 va="center",
                 fontstyle="italic",
             )
+
+        # --- Right images (transfer) ---
+        _ax_img_r = _fig.add_subplot(_gs[3])
+        _ax_img_r.set_xlim(0, 1)
+        _ax_img_r.set_ylim(-0.5, _n_right - 0.5)
+        _ax_img_r.invert_yaxis()
+        _ax_img_r.axis("off")
+        for _j, _atype in enumerate(_top_t):
+            if _atype in atype_to_mol:
+                _mol, _idx = atype_to_mol[_atype]
+                try:
+                    _img = _draw_neighborhood_cp(_mol, _idx, 1)
+                    if _img:
+                        _inset = _ax_img_r.inset_axes(
+                            [
+                                0.15,
+                                (_n_right - 1 - _j) / _n_right,
+                                0.85,
+                                0.9 / _n_right,
+                            ],
+                            transform=_ax_img_r.transAxes,
+                        )
+                        _inset.imshow(_img)
+                        _inset.axis("off")
+                except Exception:
+                    pass
 
         _fig.suptitle(
             f"{endpoint}: Chemprop Scratch vs RLM-Transfer "
@@ -1040,12 +1343,14 @@ def _(
     _fig_hlm = _plot_chemprop_comparison(
         _agg_hlm_s,
         _agg_hlm_t,
+        hlm_atype_to_mol,
         "HLM Stability",
         "hlm-chemprop-scratch-vs-transfer-aggregate",
     )
     _fig_pampa = _plot_chemprop_comparison(
         _agg_pampa_s,
         _agg_pampa_t,
+        pampa_atype_to_mol,
         "PAMPA pH 7.4",
         "pampa-chemprop-scratch-vs-transfer-aggregate",
     )
@@ -1068,7 +1373,8 @@ def _(
     Mean normalized atom-type saliency across all 25 CV folds, with
     cross-fold standard deviation as error bars. Italic annotations show
     rank stability: how many of the 25 folds each atom type appeared in
-    that model's top-10.
+    that model's top-10. Fragment images show the 1-bond neighborhood
+    around a representative instance of each atom type (center highlighted).
             """),
             mo.md("### HLM Stability"),
             mo.as_html(_fig_hlm),
