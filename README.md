@@ -70,8 +70,13 @@ Three model architectures, each tested with and without RLM pre-training:
 - **Chemprop D-MPNN** (318K parameters). Transfer means loading
   RLM-pretrained encoder weights and re-initializing the FFN head.
 - **CheMeleon** (9.3M parameters), a D-MPNN foundation model pre-trained
-  on 1M PubChem compounds. Tested with full finetuning and with the
-  encoder frozen (615K trainable parameters).
+  on 1M PubChem compounds to predict computed physicochemical properties
+  (topological, electronic, and structural features calculable from the
+  molecular graph alone -- no experimental or biological data involved).
+  The pre-training objective is purely structural, so the learned
+  representations carry no bias toward any particular biological endpoint.
+  Tested with full finetuning and with the encoder frozen (615K trainable
+  parameters).
 
 No hyperparameter tuning was performed. All models use default or near-default configurations. Chemprop uses library defaults throughout (d_h=300, depth=3, 1-layer FFN, no dropout, no batch norm, 30 epochs, batch size 64). XGBoost uses common practitioner defaults: learning rate 0.1, subsample=0.8, colsample_bytree=0.8, 200 boosting rounds, early stopping at 20 rounds patience -- standard "mildly regularized" settings, not tuned for these datasets. CheMeleon inherits its encoder architecture from the foundation model weights and uses the same FFN & training configuration as Chemprop. This is deliberate: the comparison is between architectures and transfer strategies, not between tuning budgets. Any of these models could likely improve with a hyperparameter search, but the relative rankings and especially the transfer failure modes are structural properties of the architectures, not artifacts of under-tuning.
 
@@ -581,5 +586,5 @@ uv run marimo edit notebooks/15-data-efficiency.py
 7. Yang, K. *et al.* Analyzing Learned Molecular Representations for Property Prediction. *J Chem Inf Model* **59**, 3370–3388 (2019).
 8. Heid, E. *et al.* Chemprop: A Machine Learning Package for Chemical Property Prediction. *J Chem Inf Model* **64**, 9–17 (2024).
 9. Chemprop: [github.com/chemprop/chemprop](https://github.com/chemprop/chemprop)
-10. CheMeleon: [github.com/JacksonBurns/chemeleon](https://github.com/JacksonBurns/chemeleon) / [Zenodo](https://zenodo.org/records/15460715)
+10. Burns, J.W. *et al.* Deep Learning Foundation Models from Classical Molecular Descriptors. *arXiv* 2506.15792 (2025). [arXiv:2506.15792](https://arxiv.org/abs/2506.15792) / [github.com/JacksonBurns/chemeleon](https://github.com/JacksonBurns/chemeleon) / [Zenodo](https://zenodo.org/records/15460715)
 11. NCATS ADME: [opendata.ncats.nih.gov/adme](https://opendata.ncats.nih.gov/adme)
