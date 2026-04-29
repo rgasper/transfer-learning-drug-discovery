@@ -36,6 +36,8 @@ The argument that transfer benefit comes from structural rules rather than share
 
 **No random pre-training control.**
 
+- resolved: ran the experiment (scripts/run-xgb-random-pretrain.py). Random-label transfer degrades PAMPA modestly (AUC-PR 0.899 vs 0.915 scratch) while real RLM transfer is far worse (0.852). Both explanations have merit -- there is a structural cost to extra trees, but the dominant damage is from inheriting coherent wrong decisions. Full writeup in docs/random-label-pretraining.md, referenced from the main README.
+
 A critical missing experiment: what happens if you pre-train XGBoost on *random labels* for the same molecules? If XGBoost-random-pretrain also collapses on PAMPA, the claim that the failure is about *wrong* decision boundaries is weakened -- it might just be that *any* additional trees degrade the model when the original signal was noise. If XGBoost-random-pretrain performs *differently* from XGBoost-RLM-pretrain, that tells you something about the specific content of the inherited decisions vs. the structural problem of having extra trees.
 
 **No "retrain XGBoost from scratch using RLM-derived features" control.**

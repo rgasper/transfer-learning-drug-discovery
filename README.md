@@ -267,7 +267,7 @@ The divergent outcomes are not about "trees vs. neural networks" as architecture
 
 XGBoost's standard transfer protocol (continue-boosting) transfers at the decision boundary. When we continue boosting from an RLM-pretrained model, new trees build on top of the existing RLM decision boundaries. If the target task has similar decision boundaries (HLM), this is helpful. If the target task has different decision boundaries (PAMPA), the existing trees actively mislead the model -- it starts from a wrong baseline, and the new trees must first undo the RLM predictions before learning PAMPA patterns.
 
-An [ablation experiment](docs/xgb-transfer-ablation.md) confirms this damage is structural and irrecoverable: increasing the finetuning budget from 200 to 1000 rounds produces no improvement, because inherited trees permanently contribute to predictions and cannot be deleted or modified by subsequent boosting.
+An [ablation experiment](docs/xgb-transfer-ablation.md) confirms this damage is structural and irrecoverable: increasing the finetuning budget from 200 to 1000 rounds produces no improvement, because inherited trees permanently contribute to predictions and cannot be deleted or modified by subsequent boosting. A [random-label pre-training control](docs/random-label-pretraining.md) further clarifies the mechanism: XGBoost pre-trained on *shuffled* RLM labels (same molecules, same class balance, no real signal) degrades PAMPA performance modestly (AUC-PR 0.899 vs 0.915 scratch), while real RLM pre-training is far worse (0.852). The structural cost of extra trees is real but mild; the dominant damage comes from inheriting *coherent, wrong* decision boundaries that systematically mislead the target model.
 
 XGBoost's feature-importance transfer protocol avoids this problem entirely. Instead of inheriting decision trees, we extract the RLM model's feature importances (gain) and use them as `feature_weights` to bias column sampling probability during tree construction on the target task. The model builds all new trees from scratch -- no inherited decisions -- but the source model's knowledge of which fingerprint bits are informative guides the new model's attention. The result: completely neutral on both endpoints (+0.001 on HLM, +0.000 on PAMPA, neither significant). This protocol is safe but also inert. It transfers *which features to look at* but not *what to learn from them*, and that attention signal alone is too weak to matter. The model's own training data is sufficient to discover the relevant features, and the prior neither helps nor hinders that process.
 
@@ -518,6 +518,7 @@ xfer-learning/
     run-chemeleon-training.py          # CheMeleon CV training with disk caching
     run-chemeleon-frozen-training.py   # CheMeleon frozen encoder training
     run-xgb-ablation.py               # XGBoost transfer ablation experiment
+    run-xgb-random-pretrain.py        # XGBoost random-label pre-training control
     run-rlm-base-eval-xgb.py          # RLM base eval: XGBoost (run first)
     run-rlm-base-eval-nn.py           # RLM base eval: Chemprop + CheMeleon (merges results)
   src/xfer_learning/                   # Package (placeholder)
@@ -528,6 +529,7 @@ xfer-learning/
     foundation-model-puzzle.md         # Frozen encoder investigation and feature importance
     reverse-transfer.md                # Reverse transfer experiment (PAMPA → RLM)
     xgb-transfer-ablation.md           # XGBoost ablation results
+    random-label-pretraining.md        # Random-label pre-training control
     tukey-hsd-interval-widths.md       # Statistical method note
     figures/                           # Exported plots
 ```
