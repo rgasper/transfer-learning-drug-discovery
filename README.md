@@ -252,56 +252,7 @@ Chemprop transfers at the representation level. When we load RLM-pretrained weig
 
 This is the fundamental advantage of representation-level transfer: the features generalize even when the task does not, and to new molecules which share common substructures / functional groups as the pre-trained dataset.
 
----
-
-## Sidebar: The Foundation Model Puzzle
-
-Our initial experiments used only the first six models, with CheMeleon fully finetuned. The foundation model produced counterintuitively *worse* results than the much smaller Chemprop -- which led us to hypothesize overfitting and add the frozen-encoder variants. See [docs/chemeleon-overfitting.md](docs/chemeleon-overfitting.md) for the full narrative.
-
-### The problem
-
-CheMeleon single-finetune (0.908 AUC-PR) is worse than Chemprop scratch (0.917) on PAMPA, though the difference is not statistically significant (Tukey HSD, p = 0.98). With 9.3M parameters and ~1,626 PAMPA training samples, CheMeleon is extremely overparameterized. The foundation pre-training provides a reasonable initialization, but 30 epochs of finetuning is enough to overfit. The smaller Chemprop model (318K params) has less capacity to memorize noise.
-
-### The fix: freeze the encoder
-
-We froze the 8.7M-parameter BondMessagePassing layer and trained only the FFN head (~615K trainable parameters). If the foundation representations are good enough and the full-finetune models were overfitting, the frozen variants should improve.
-
-| Target | Model | AUC-PR (mean +/- std) |
-|---|---|---|
-| **HLM** | CheMeleon single-finetune (unfrozen) | 0.790 +/- 0.044 |
-| | CheMeleon double-finetune (unfrozen) | 0.806 +/- 0.032 |
-| | CheMeleon frozen single | 0.819 +/- 0.035 |
-| | CheMeleon frozen double | 0.819 +/- 0.034 |
-| **PAMPA** | CheMeleon single-finetune (unfrozen) | 0.908 +/- 0.029 |
-| | CheMeleon double-finetune (unfrozen) | 0.912 +/- 0.025 |
-| | CheMeleon frozen single | 0.921 +/- 0.029 |
-| | CheMeleon frozen double | 0.922 +/- 0.029 |
-
-![CheMeleon frozen vs unfrozen boxplots](docs/figures/chemeleon-frozen-boxplots.png)
-
-*AUC-PR distributions for CheMeleon variants only. Green = unfrozen (all weights finetuned). Purple = frozen encoder (FFN only).*
-
-![CheMeleon frozen vs unfrozen Tukey HSD](docs/figures/chemeleon-frozen-tukey-hsd.png)
-
-*Tukey HSD comparing frozen vs unfrozen CheMeleon variants (FWER = 0.05).*
-
-**HLM**: No significant differences between any frozen/unfrozen variant (Tukey HSD, all p > 0.06). The encoder adaptation during full finetuning neither helps nor hurts for the related endpoint.
-
-**PAMPA**: Freezing improves performance. Under AUC-ROC the improvement is statistically significant (frozen single 0.730 vs unfrozen single 0.676, p = 0.001), confirming the overfitting hypothesis. Under AUC-PR the effect is present but compressed by the narrow effective range above the 0.855 baseline.
-
-### What the frozen encoder attends to
-
-With the encoder frozen, only the FFN head differs between single and double finetune. Does the intermediate RLM step change what the model attends to?
-
-![CheMeleon frozen single vs double](docs/figures/pampa-chemeleon-single-vs-double.png)
-
-*CheMeleon frozen single-finetune (Foundation→PAMPA) vs frozen double-finetune (Foundation→RLM→PAMPA). Top 6 atom types by gradient saliency. Since the encoder is frozen, differences reflect the FFN head only. Single fold.*
-
-The two panels are nearly identical: S deg1, O(arom) deg2, S deg2, S deg4, S(arom) deg2, and N(arom) deg3 appear in both top-6 lists in the same order. Importantly, the two models are not *forced* to attend to the same features just because the encoder is frozen. The saliency measurement captures how much the final prediction depends on each atom, which is influenced by both the encoder and the decision-making layer (FFN head). Since the FFN heads were trained via different paths (one saw RLM data, one did not), they could in principle weight the encoder's outputs differently. The fact that they don't -- that independently trained decision layers converge on the same atomic attention pattern -- suggests the foundation encoder produces features whose relative importance is baked into the representation itself, not imposed by downstream training.
-
-The dominance of sulfur environments (S deg1, S deg2, S deg4, S(arom) deg2 -- four of the top six) is chemically interesting. Thioethers and sulfonamides are common motifs in drug-like molecules that affect both lipophilicity (via the polarizable sulfur atom) and membrane partitioning. The CheMeleon foundation model, pre-trained on Mordred descriptors across 1M compounds, appears to have learned particularly discriminating representations for sulfur-containing functional groups. Aromatic oxygens (O(arom) deg2 -- furan/pyran-type oxygens) and aromatic nitrogens (N(arom) deg3 -- trisubstituted pyridine-like nitrogens) round out the top features, both of which influence the balance of lipophilicity and hydrogen bonding that governs passive permeability.
-
-The frozen CheMeleon models are statistically indistinguishable from Chemprop RLM-transfer under both AUC-PR (p > 0.99) and AUC-ROC (p > 0.98) on PAMPA. The CheMeleon foundation representations -- learned from 1M PubChem compounds predicting Mordred descriptors -- are genuinely useful general molecular features, but only when the model is prevented from overwriting them during finetuning on a small dataset.
+This pattern is not specific to the RLM→PAMPA direction. A [reverse transfer experiment](docs/reverse-transfer.md) (PAMPA→RLM) produces the same result: XGBoost PAMPA-transfer drops from ~0.50 to ~0.38 AUC-PR on RLM (catastrophic), while Chemprop PAMPA-transfer improves slightly from ~0.57 to ~0.59 (not significant). The architectural vulnerability to irrelevant pre-training is symmetric regardless of which target the model learns first.
 
 ---
 
@@ -309,11 +260,11 @@ The frozen CheMeleon models are statistically indistinguishable from Chemprop RL
 
 ### The elephant in the room: why not just use XGBoost?
 
-Look at the PAMPA results again. XGBoost scratch scores 0.910 AUC-PR. Chemprop RLM-transfer -- the best model, after pre-training on a related endpoint, training a 318K-parameter neural network, and carefully managing the transfer protocol -- scores 0.925. That's a 0.015 improvement, not statistically significant. On HLM, the gap is wider (0.739 vs 0.831), but XGBoost with RLM transfer (0.789) is competitive with Chemprop scratch (0.793).
+Look at the PAMPA results again. XGBoost scratch scores 0.910 AUC-PR. Chemprop RLM-transfer -- the best model, after pre-training on a related endpoint, training a 318K-parameter neural network, and carefully managing the transfer protocol -- scores 0.925. That's a 0.015 improvement, not statistically significant. CheMeleon frozen, a 9.3M-parameter foundation model pre-trained on 1M compounds, scores 0.922 -- roughly 3,000x the parameters of XGBoost for statistically indistinguishable results. On HLM, the gap is wider (0.739 vs 0.831), but XGBoost with RLM transfer (0.789) is competitive with Chemprop scratch (0.793).
 
 So: why bother with graph neural networks at all?
 
-The honest answer is that *on these datasets, at this scale*, the practical performance difference is small. A medicinal chemist making go/no-go decisions would get similar value from a well-tuned XGBoost on Morgan fingerprints as from a D-MPNN, for most compounds. The XGBoost model trains in seconds, requires no GPU, has mature interpretability tooling (SHAP), and is easy to deploy. These are real advantages.
+The honest answer is that *on these datasets, at this scale*, the practical performance difference is small. A medicinal chemist making go/no-go decisions would get similar value from a well-tuned XGBoost on Morgan fingerprints as from a D-MPNN, for most compounds. The XGBoost model trains in single-digit seconds, requires no GPU, has mature interpretability tooling (SHAP), and is easy to deploy.These are real advantages. While these specific neural networks are also quite small and train in only a few minutes, the question is real - they are harder to work with and more expensive than a much simpler XGBoost model, with no clear performance advantage.
 
 But the results reveal a more subtle argument for the D-MPNN architectures, one that has nothing to do with peak accuracy on a leaderboard:
 
@@ -327,7 +278,7 @@ But the results reveal a more subtle argument for the D-MPNN architectures, one 
    pre-training source is mechanistically related to your target. D-MPNN
    architectures give you a safety net: even if the transfer is
    irrelevant, representation-level transfer does not poison the model.
-   You pay no penalty for trying.
+   You pay no penalty for trying. Additional training on diverse chemical matter and against diverse targets forces the models to learn diverse and generalizable stories about how chemical structure impacts predictions against various targets, and does not cause worse performance.
 
 2. **Stability across data splits.** The [RLM base model
    comparison](#validating-the-starting-point) reveals that XGBoost's
@@ -337,25 +288,23 @@ But the results reveal a more subtle argument for the D-MPNN architectures, one 
    test -- a sign that the fixed fingerprint representation captures less
    generalizable structure than the learned representations. In a
    production setting where you retrain on updated compound libraries,
-   this translates to less predictable model behavior over time.
+   this translates to less predictable model behavior over time. It also raises substantial unnecessary doubt. You cannot know if you got lucky or unlucky!
 
-3. **Scaling behavior.** These are small datasets (900-2,500 compounds).
-   The advantage of learned representations over fixed fingerprints tends
-   to grow with dataset size, as the representation can capture
-   increasingly subtle structural patterns that a fixed-radius Morgan
-   fingerprint cannot encode. Our results are consistent with prior
-   literature showing that D-MPNNs overtake fingerprint methods more
-   decisively on larger datasets (>10K compounds) and on targets where
-   long-range molecular topology matters.
+3. **Data efficiency.** To test how the architectures compare with less data, we trained all three on 1%, 10%, 25%, 50%, 75%, and 100% of the RLM training data (subsampling within each CV fold, 25 folds per fraction):
 
-4. **Foundation model potential.** The CheMeleon frozen results
-   demonstrate that a foundation model pre-trained on 1M compounds
-   produces representations competitive with task-specific Chemprop
-   training -- without any task-specific message-passing gradients. As
-   these foundation models scale to larger pre-training corpora and more
-   diverse pre-training objectives, the gap is likely to widen. The
-   current results represent a lower bound on what foundation approaches
-   can deliver.
+   ![Data efficiency](docs/figures/data-efficiency-rlm.png)
+
+   *Mean AUC-PR (+/- SEM) across 25 CV folds at each training data fraction. Asterisks mark models not significantly different from the best at that fraction (Tukey HSD, FWER = 0.05). Dotted line = random baseline.*
+
+   At 1% (~20 compounds), all three architectures are near the random baseline and statistically indistinguishable -- there's simply not enough data for any model to learn from. But the curves diverge rapidly. By 10% (~200 compounds), CheMeleon frozen already leads significantly, leveraging its foundation representations to extract signal from minimal task-specific data. By 25% (~500 compounds) the CheMeleon frozen model is already as good as XGBoost at 100% of the data -- and this holds across all 25 CV folds, meaning the result is stable to *which* 25% of the data you happen to have! XGBoost initially keeps pace with Chemprop but plateaus around 50%, while Chemprop continues climbing and overtakes XGBoost at the 50% mark. By 100% (~2,000 training compounds), CheMeleon frozen and Chemprop are well ahead of XGBoost, and the gap shows no sign of closing. The practical implication: if you have fewer than ~500 task-specific compounds, the foundation model's pre-learned molecular vocabulary provides a substantial head start that neither XGBoost nor a scratch D-MPNN can match.
+
+4. **Pre-trained representations encode real chemistry.** The data efficiency results reinforce this: CheMeleon frozen dominates at every data fraction from 10% onward, producing representations competitive with task-specific Chemprop training -- without any task-specific message-passing gradients. A deeper look at what the frozen encoder attends to reveals that its feature importance rankings are nearly identical whether finetuned directly on PAMPA or routed through RLM first:
+
+   ![CheMeleon frozen single vs double](docs/figures/pampa-chemeleon-single-vs-double.png)
+
+   *CheMeleon frozen single-finetune (Foundation→PAMPA) vs frozen double-finetune (Foundation→RLM→PAMPA). Top 6 atom types by gradient saliency. Since the encoder is frozen, any differences would reflect the FFN head only. Single fold.*
+
+   Independently trained FFN heads converge on the same atomic attention pattern -- sulfur environments dominate in both, followed by aromatic oxygens and nitrogens. This suggests the foundation representations encoded a "chemical vocabulary" that is more intrinsic to the molecular structure rather than imposed by the particular training objective. As these foundation models scale to larger pre-training corpora and more diverse objectives, the level of chemical nuance they can learn in a generalized manner should increase - their "chemical vocabulary" will grow - leading to an even bigger performance gap over smaller models. The current results represent a lower bound on what foundation approaches can deliver. (The foundation model also initially underperformed due to overfitting when fully finetuned; freezing the encoder fixed this -- see [docs/foundation-model-puzzle.md](docs/foundation-model-puzzle.md) for the full investigation.)
 
 5. **Composability.** The D-MPNN encoder is a modular component that can
    be plugged into multi-task architectures, uncertainty-aware models,
@@ -366,51 +315,13 @@ But the results reveal a more subtle argument for the D-MPNN architectures, one 
 
 None of this means XGBoost is the wrong choice for a team that needs a quick, interpretable model for a single ADME endpoint with a few thousand compounds. It probably *is* the right first model in that scenario. But the results here show that as soon as you start building transfer learning pipelines -- as soon as you want to leverage knowledge across endpoints, accumulate institutional learning across projects, or build systems that are robust to imperfect pre-training choices -- the architectural properties of D-MPNNs (separable encoder/head, transferable representations, graceful degradation under irrelevant transfer) become decisive advantages that no amount of XGBoost hyperparameter tuning can replicate.
 
-### Key findings
+### Scope and caveats
 
-On this dataset and at this scale (~900-2,500 compounds per endpoint):
+These results are specific to the NCATS ADME public subsets and the particular model configurations tested. Different dataset sizes, endpoint types, hyperparameter choices, or pre-training strategies could yield different rankings. No hyperparameter tuning was performed for any model, and the transfer failure modes described here are architectural properties that tuning is unlikely to resolve -- but the relative performance of the architectures on other datasets remains an open question.
 
-- Transfer learning from a mechanistically related endpoint (RLM->HLM)
-  improved all architectures tested. The benefit was present even with
-  only 5.6% molecule overlap between source and target, suggesting the
-  models learn transferable structural rules rather than memorizing
-  specific compounds.
-- Transfer learning from a mechanistically unrelated endpoint (RLM->PAMPA)
-  was catastrophic for XGBoost (-0.057 AUC-PR, dropping to the random
-  baseline), harmless-to-slightly-helpful for Chemprop (+0.008), and
-  marginally helpful for CheMeleon (+0.004). The D-MPNN architectures
-  were robust to irrelevant pre-training; XGBoost was not.
-- The catastrophic XGBoost failure is structural and irrecoverable:
-  [ablation experiments](docs/xgb-transfer-ablation.md) show that
-  increasing the finetuning budget by 5x does not recover performance.
-  Inherited decision trees permanently bias predictions because
-  subsequent boosting cannot delete or modify existing trees.
-- The 9.3M-parameter CheMeleon foundation model underperformed the
-  318K-parameter Chemprop model when fully finetuned. The frozen-encoder
-  experiment confirmed this was due to overfitting: freezing the encoder
-  and training only the FFN head improved performance, and the frozen
-  CheMeleon became statistically indistinguishable from the best models
-  on both endpoints.
+### Conclusions
 
-These results are specific to the NCATS ADME public subsets and the particular model configurations tested. Different dataset sizes, endpoint types, hyperparameter choices, or pre-training strategies could yield different rankings.
-
-### Additional experiments
-
-Two supplementary analyses extend the main findings:
-
-- **CheMeleon feature importance on PAMPA** (notebook 13): Compares
-  gradient saliency between the frozen single-finetune (Foundation→PAMPA)
-  and frozen double-finetune (Foundation→RLM→PAMPA) to test whether the
-  intermediate RLM step alters what the frozen encoder attends to.
-
-- **Reverse transfer: PAMPA→RLM** ([docs/reverse-transfer.md](docs/reverse-transfer.md),
-  notebook 14): The pattern is symmetric. XGBoost PAMPA-transfer drops
-  from ~0.50 to ~0.38 AUC-PR on RLM (catastrophic), while Chemprop
-  PAMPA-transfer improves slightly from ~0.57 to ~0.59 (not significant).
-  Both XGBoost variants are significantly worse than both Chemprop
-  variants. The architectural vulnerability to irrelevant transfer is
-  not directional -- it's a general property of decision-boundary
-  transfer.
+Transfer learning works for molecular property prediction, but the choice of model architecture determines whether it's safe to try. XGBoost on fixed fingerprints transfers at the decision boundary -- helpful when the source and target are related, catastrophic when they're not, and irrecoverable either way. D-MPNNs transfer at the representation level -- the encoder learns a general molecular vocabulary that carries over regardless of whether the source task is relevant, and the replaceable FFN head ensures wrong associations are never inherited. Foundation models like CheMeleon take this further: pre-trained on a million compounds, the frozen encoder provides representations that outperform task-specific training at every data size above 10%, and its feature importance patterns are stable across independently trained decision heads. For teams building ADME prediction pipelines, the practical recommendation is straightforward: use XGBoost for quick, interpretable single-endpoint models when you have enough data and no transfer ambitions; use a D-MPNN when you want to build on prior work across endpoints; and use a frozen foundation model when data is scarce.
 
 ---
 
@@ -578,6 +489,7 @@ xfer-learning/
   docs/
     initial-plan.md                    # Experiment design document
     chemeleon-overfitting.md           # CheMeleon overfitting narrative
+    foundation-model-puzzle.md         # Frozen encoder investigation and feature importance
     reverse-transfer.md                # Reverse transfer experiment (PAMPA → RLM)
     xgb-transfer-ablation.md           # XGBoost ablation results
     tukey-hsd-interval-widths.md       # Statistical method note
