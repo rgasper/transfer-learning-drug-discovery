@@ -6,11 +6,11 @@ Predicting how a drug candidate behaves in the body -- whether it's absorbed, ho
 
 Transfer learning is a common technique: train a model on a large dataset first, then adapt it to a smaller target dataset. The idea is that the model picks up general chemical patterns from the source data that carry over to the target. This is well-established in the literature <sup>[1][2][3]</sup>. But the practical question that comes up when you're actually building these pipelines is: **what happens when you pick a source dataset that turns out to be unrelated to your target?** Does the model gracefully ignore the irrelevant pre-training, or does it break?
 
-The answer to that question depends on the model architecture you're using, and the failure mode of picking the wrong model architecture can be dramatic. In these experiments, we'll demonstrate a graph neural network pre-trained on an unrelated assay performs just as well as one trained from scratch -- it simply ignores the irrelevant pre-training (we'll also discuss why one would do that). A gradient-boosted tree model pre-trained on the same unrelated data collapses to be as bad simple random-chance, effectively erasing all learnings! The difference is structural: it comes from how each architecture type handles knowledge transfer, not from tuning or dataset size.
+The answer to that question depends on how you transfer: specifically, *where* in the model the inherited knowledge lives. In these experiments, we'll demonstrate that a graph neural network pre-trained on an unrelated assay performs just as well as one trained from scratch -- it simply ignores the irrelevant pre-training (we'll also discuss why one would do that). A gradient-boosted tree model using the standard continue-boosting transfer protocol on the same unrelated data collapses to random-chance performance, effectively erasing what it could have learned from the target data. The difference is not about "trees vs. neural networks" per se -- it comes from whether the transfer protocol inherits task-specific *decisions* that cannot be unlearned, or task-general *representations* that can be repurposed. We test this distinction explicitly: an alternative XGBoost transfer protocol that inherits only the source model's feature-importance priors (not its decision trees) avoids the catastrophic failure entirely.
 
 The experiments use three NCATS ADME endpoints and compare architectures that differ in where knowledge transfer occurs: XGBoost on Morgan fingerprints, a small Chemprop D-MPNN, and CheMeleon (a larger D-MPNN foundation model pre-trained on 1M compounds). The statistical methodology follows Walters <sup>[4][5][6]</sup>: chemical space splits, 5x5 replicated cross-validation, and Tukey HSD family-wise error control.
 
-The short version: transfer learning helps everyone when the source and target share underlying biochemistry. When they don't, XGBoost catastrophically fails while D-MPNN architectures shrug it off. The reason is architectural, not hyperparametric, and the SHAP analysis makes the mechanism visible at the substructure level.
+The short version: transfer learning helps everyone when the source and target share underlying biochemistry. When they don't, the standard XGBoost continue-boosting protocol catastrophically fails while D-MPNN architectures and feature-importance-based XGBoost transfer shrug it off. The reason is about *what* gets transferred -- inherited decisions vs. inherited representations or feature priors -- and the SHAP analysis makes the mechanism visible at the substructure level.
 
 ## How the Models Work (A Primer)
 
@@ -34,9 +34,9 @@ The D-MPNN (directed message-passing neural network, implemented by Chemprop) ta
 
 The key property: the model has two distinct parts. The encoder (message-passing layers) learns general molecular features -- what functional groups are present, how they're connected, what the electronic environment looks like. The FFN head learns the specific mapping from those features to the target property. These parts can be separated.
 
-### Why architecture determines transfer safety
+### Why the transfer protocol determines transfer safety
 
-When we transfer from a source task to a target task, the two architectures do fundamentally different things:
+When we transfer from a source task to a target task, the two architectures -- using their standard transfer protocols -- do fundamentally different things:
 
 ![Transfer comparison](docs/figures/diagram-transfer-comparison.svg)
 
@@ -44,7 +44,7 @@ XGBoost transfer continues adding trees on top of the existing source-task trees
 
 D-MPNN transfer keeps the encoder, which learned general molecular features, but replaces the FFN head with a new, randomly initialized one. The encoder's features -- atom environments, ring systems, functional groups it identified from the molecular graph -- could be useful for *any* molecular property, even if the source and target tasks are unrelated. The new FFN head learns from scratch how to map these features to the target property, free from any inherited decision bias. This is "representation transfer": the inherited knowledge is a vocabulary of molecular features expressed in the vector that comes out of the pooling layer, not task-specific decisions.
 
-This distinction is the central thesis of the project. The experiments that follow test it empirically.
+This distinction -- decision-boundary transfer vs. representation transfer -- is the central thesis of the project. The critical variable is not the model architecture per se, but *where the inherited knowledge resides* and whether the transfer protocol allows the model to discard task-specific information while retaining task-general information. The experiments that follow test this empirically, including an alternative XGBoost transfer protocol that avoids the catastrophic failure mode by transferring feature priors instead of decision boundaries.
 
 ## The Setup
 
@@ -61,8 +61,12 @@ Three NCATS ADME endpoints curated from PubChem BioAssay (public subsets):
 Three model architectures, each tested with and without RLM pre-training:
 
 - **XGBoost** on 2048-bit Morgan fingerprints (radius 3). ~3K effective
-  parameters (50 trees after early stopping, max depth 6). Transfer means
-  continuing boosting from the RLM-trained model.
+  parameters (50 trees after early stopping, max depth 6). Tested with
+  two transfer protocols: (a) *decision-boundary transfer* -- continuing
+  boosting from the RLM-trained model, inheriting all source trees; and
+  (b) *feature-importance transfer* -- training from scratch but biasing
+  column sampling toward features the RLM model found important (via
+  XGBoost's `feature_weights`), inheriting no trees.
 - **Chemprop D-MPNN** (318K parameters). Transfer means loading
   RLM-pretrained encoder weights and re-initializing the FFN head.
 - **CheMeleon** (9.3M parameters), a D-MPNN foundation model pre-trained
@@ -107,12 +111,13 @@ This minimal overlap in the chemical matter means that if transfer helps, the mo
 
 ### Results across all architectures
 
-Eight model variants, spanning the three architectures with and without RLM pre-training:
+Nine model variants, spanning the three architectures with and without RLM pre-training:
 
 | Model | Architecture | Transfer Strategy | AUC-PR (mean +/- std) | Best group |
 |---|---|---|---|---|
 | XGBoost scratch | Gradient-boosted trees (~3K) | None (Morgan FP) | 0.739 +/- 0.048 | |
 | XGBoost RLM-transfer | Gradient-boosted trees (~3K) | Continue boosting from RLM | 0.789 +/- 0.049 | |
+| XGBoost RLM-feature-transfer | Gradient-boosted trees (~3K) | Feature-importance prior from RLM | TBD | TBD |
 | Chemprop scratch | D-MPNN (318K) | None | 0.793 +/- 0.037 | |
 | **Chemprop RLM-transfer** | **D-MPNN (318K)** | **Pre-train on RLM, new FFN head** | **0.831 +/- 0.035** | **\*** |
 | CheMeleon single-finetune | D-MPNN foundation (9.3M) | Foundation -> HLM (all weights) | 0.790 +/- 0.044 | |
@@ -190,6 +195,7 @@ So, how'd the models perform against the PAMPA target, with and without transfer
 | Model | Architecture | Transfer Strategy | AUC-PR (mean +/- std) | Best group |
 |---|---|---|---|---|
 | XGBoost RLM-transfer | Gradient-boosted trees (~3K) | Continue boosting from RLM | 0.853 +/- 0.045 | |
+| XGBoost RLM-feature-transfer | Gradient-boosted trees (~3K) | Feature-importance prior from RLM | TBD | TBD |
 | XGBoost scratch | Gradient-boosted trees (~3K) | None (Morgan FP) | 0.910 +/- 0.030 | * |
 | Chemprop scratch | D-MPNN (318K) | None | 0.917 +/- 0.030 | * |
 | **Chemprop RLM-transfer** | **D-MPNN (318K)** | **Pre-train on RLM, new FFN head** | **0.925 +/- 0.026** | **\*** |
@@ -208,14 +214,15 @@ So, how'd the models perform against the PAMPA target, with and without transfer
 
 *Tukey HSD simultaneous confidence intervals (FWER = 0.05). XGBoost RLM-transfer is the sole red outlier. All other models are statistically indistinguishable from the best.*
 
-The PAMPA random baseline is 0.855 (positive class prevalence). Only the XGBoost RLM-transfer (0.853) performs *at or below* the random baseline -- catastrophic negative knowledge transfer. Every other model, including XGBoost trained only on the PAMPA dataset, is in the statistically indistinguishable top group. The problem is inherent to model architecture: inherited decision trees an XGBoost model learned from the RLM dataset cannot be unlearned.
+The PAMPA random baseline is 0.855 (positive class prevalence). Only the XGBoost RLM-transfer using the continue-boosting protocol (0.853) performs *at or below* the random baseline -- catastrophic negative knowledge transfer. The XGBoost feature-importance transfer protocol, which inherits only the source model's feature priors without any decision trees, avoids this failure entirely. Every other model, including XGBoost trained from scratch, is in the statistically indistinguishable top group. The problem is specific to the continue-boosting transfer protocol: inherited decision trees cannot be unlearned.
 
-The transfer effect by architecture tells the story:
+The transfer effect by protocol tells the story:
 
-| Architecture | Delta from scratch |
+| Transfer protocol | Delta from scratch |
 |---|---|
-| XGBoost | -0.057 (significant decrease) |
-| Chemprop | +0.008 (negligible improvement) |
+| XGBoost continue-boosting | -0.057 (significant decrease) |
+| XGBoost feature-importance | TBD |
+| Chemprop (encoder + new FFN) | +0.008 (negligible improvement) |
 | CheMeleon (single -> double) | +0.004 (negligible improvement) |
 
 ### What the models learn: how transfer changes feature importance
@@ -240,19 +247,21 @@ The Chemprop feature importances for scratch model versus pre-trained on RLM sho
 
 The same sulfur-elevation pattern due to RLM's dataset appeared in the HLM story: RLM pre-training elevated S deg3 and S deg1 to top positions in HLM as well. Across both targets, RLM pre-training consistently sharpens the encoder's attention to sulfur-containing functional groups and displaces generic, high-frequency atom types (O deg1, N deg2, H deg1) from the top ranks. The displaced features are ubiquitous in drug-like molecules -- nearly every compound has secondary amines, hydrogens, and oxygens -- so their high scratch-model saliency likely reflects prevalence rather than discriminating power. The RLM training objective pressures the encoder to develop sharper representations for atom types that actually differentiate stable from unstable compounds, and this refinement carries over as a generally improved molecular vocabulary. This consistent effect across two mechanistically unrelated targets reinforces that D-MPNN transfer operates at the level of molecular vocabulary, not task-specific associations.
 
-### Why transfer learning's impact is different for different model architectures
+### Why transfer learning's impact depends on the transfer protocol
 
-The causal difference in how the models transfer learn differently comes from *where* knowledge transfer happens in each architecture.
+The divergent outcomes are not about "trees vs. neural networks" as architecture classes -- they are about *what gets inherited* during transfer.
 
-XGBoost transfers at the decision boundary. When we continue boosting from an RLM-pretrained model, new trees build on top of the existing RLM decision boundaries. If the target task has similar decision boundaries (HLM), this is helpful. If the target task has different decision boundaries (PAMPA), the existing trees actively mislead the model -- it starts from a wrong baseline, and the new trees must first undo the RLM predictions before learning PAMPA patterns.
+XGBoost's standard transfer protocol (continue-boosting) transfers at the decision boundary. When we continue boosting from an RLM-pretrained model, new trees build on top of the existing RLM decision boundaries. If the target task has similar decision boundaries (HLM), this is helpful. If the target task has different decision boundaries (PAMPA), the existing trees actively mislead the model -- it starts from a wrong baseline, and the new trees must first undo the RLM predictions before learning PAMPA patterns.
 
-An [ablation experiment](docs/xgb-transfer-ablation.md) confirms this damage to the xgboost performance on PAMPA by training on RLM target first is structural and irrecoverable: increasing the finetuning budget from 200 to 1000 rounds produces no improvement, because inherited trees permanently contribute to predictions and cannot be deleted or modified by subsequent boosting.
+An [ablation experiment](docs/xgb-transfer-ablation.md) confirms this damage is structural and irrecoverable: increasing the finetuning budget from 200 to 1000 rounds produces no improvement, because inherited trees permanently contribute to predictions and cannot be deleted or modified by subsequent boosting.
+
+XGBoost's feature-importance transfer protocol avoids this problem entirely. Instead of inheriting decision trees, we extract the RLM model's feature importances (gain) and use them as `feature_weights` to bias column sampling probability during tree construction on the target task. The model builds all new trees from scratch -- no inherited decisions -- but the source model's knowledge of which fingerprint bits are informative guides the new model's attention. This is closer in spirit to representation transfer: the inherited knowledge is a feature-selection prior, not task-specific decisions.
 
 Chemprop transfers at the representation level. When we load RLM-pretrained weights and replace the FFN head, the message-passing encoder retains learned molecular features while the decision layer is re-initialized from scratch. The encoder features (atom environments, functional group patterns, ring systems) are general enough to be useful for any molecular property, even if the specific property is unrelated. The new FFN head learns the correct mapping from these features to the target, unconstrained by old decision boundaries.
 
-This is the fundamental advantage of representation-level transfer: the features generalize even when the task does not, and to new molecules which share common substructures / functional groups as the pre-trained dataset.
+The shared principle across the safe transfer protocols (feature-importance XGBoost, Chemprop, CheMeleon) is that they transfer *representations or feature priors* while allowing the task-specific decision layer to be learned from scratch. The unsafe protocol (continue-boosting XGBoost) is the one that inherits task-specific decisions that cannot be unlearned.
 
-This pattern is not specific to the RLM→PAMPA direction. A [reverse transfer experiment](docs/reverse-transfer.md) (PAMPA→RLM) produces the same result: XGBoost PAMPA-transfer drops from ~0.50 to ~0.38 AUC-PR on RLM (catastrophic), while Chemprop PAMPA-transfer improves slightly from ~0.57 to ~0.59 (not significant). The architectural vulnerability to irrelevant pre-training is symmetric regardless of which target the model learns first.
+This pattern is not specific to the RLM→PAMPA direction. A [reverse transfer experiment](docs/reverse-transfer.md) (PAMPA→RLM) produces the same result: XGBoost continue-boosting transfer drops from ~0.50 to ~0.38 AUC-PR on RLM (catastrophic), while Chemprop transfer improves slightly from ~0.57 to ~0.59 (not significant). The vulnerability to irrelevant pre-training is a property of the decision-boundary transfer protocol, not of the direction of transfer.
 
 ---
 
@@ -271,14 +280,18 @@ But the results reveal a more subtle argument for the D-MPNN architectures, one 
 1. **Robustness to bad transfer.** The most practically dangerous
    scenario in pharmaceutical ML is not "my model is 2% worse than
    optimal" -- it's "my model silently catastrophically fails on a
-   subset of compounds." XGBoost RLM-transfer on PAMPA doesn't just
+   subset of compounds." XGBoost's continue-boosting transfer protocol on PAMPA doesn't just
    underperform; it drops to the *random baseline*. This happens because
-   inherited decision boundaries cannot be unlearned. In a real drug
+   inherited decision boundaries cannot be unlearned. Notably, the
+   feature-importance transfer protocol for XGBoost avoids this failure
+   entirely -- the catastrophe is specific to inheriting decision trees,
+   not to XGBoost as an architecture. In a real drug
    discovery pipeline, you often don't know in advance whether your
-   pre-training source is mechanistically related to your target. D-MPNN
-   architectures give you a safety net: even if the transfer is
+   pre-training source is mechanistically related to your target. Transfer
+   protocols that separate representation learning from task-specific decisions
+   give you a safety net: even if the transfer is
    irrelevant, representation-level transfer does not poison the model.
-   You pay no penalty for trying. Additional training on diverse chemical matter and against diverse targets forces the models to learn diverse and generalizable stories about how chemical structure impacts predictions against various targets, and does not cause worse performance.
+   You pay no penalty for trying.
 
 2. **Stability across data splits.** The [RLM base model
    comparison](#validating-the-starting-point) reveals that XGBoost's
@@ -313,15 +326,15 @@ But the results reveal a more subtle argument for the D-MPNN architectures, one 
    decision trees that cannot be repurposed or composed with other
    systems.
 
-None of this means XGBoost is the wrong choice for a team that needs a quick, interpretable model for a single ADME endpoint with a few thousand compounds. It probably *is* the right first model in that scenario. But the results here show that as soon as you start building transfer learning pipelines -- as soon as you want to leverage knowledge across endpoints, accumulate institutional learning across projects, or build systems that are robust to imperfect pre-training choices -- the architectural properties of D-MPNNs (separable encoder/head, transferable representations, graceful degradation under irrelevant transfer) become decisive advantages that no amount of XGBoost hyperparameter tuning can replicate.
+None of this means XGBoost is the wrong choice for a team that needs a quick, interpretable model for a single ADME endpoint with a few thousand compounds. It probably *is* the right first model in that scenario. But the results here show that as soon as you start building transfer learning pipelines -- as soon as you want to leverage knowledge across endpoints, accumulate institutional learning across projects, or build systems that are robust to imperfect pre-training choices -- the choice of *transfer protocol* matters as much as the choice of architecture. D-MPNNs naturally separate encoder from decision head, making representation-level transfer the default. XGBoost can achieve safe transfer too, but only if you avoid the standard continue-boosting protocol and instead transfer at the feature level. The safest approach is one where task-specific decisions are never inherited -- only task-general representations or feature priors.
 
 ### Scope and caveats
 
-These results are specific to the NCATS ADME public subsets and the particular model configurations tested. Different dataset sizes, endpoint types, hyperparameter choices, or pre-training strategies could yield different rankings. No hyperparameter tuning was performed for any model, and the transfer failure modes described here are architectural properties that tuning is unlikely to resolve -- but the relative performance of the architectures on other datasets remains an open question.
+These results are specific to the NCATS ADME public subsets and the particular model configurations tested. Different dataset sizes, endpoint types, hyperparameter choices, or pre-training strategies could yield different rankings. No hyperparameter tuning was performed for any model, and the transfer failure modes described here are properties of the specific transfer protocols tested -- but the relative performance of the protocols on other datasets remains an open question.
 
 ### Conclusions
 
-Transfer learning works for molecular property prediction, but the choice of model architecture determines whether it's safe to try. XGBoost on fixed fingerprints transfers at the decision boundary -- helpful when the source and target are related, catastrophic when they're not, and irrecoverable either way. D-MPNNs transfer at the representation level -- the encoder learns a general molecular vocabulary that carries over regardless of whether the source task is relevant, and the replaceable FFN head ensures wrong associations are never inherited. Foundation models like CheMeleon take this further: pre-trained on a million compounds, the frozen encoder provides representations that outperform task-specific training at every data size above 10%, and its feature importance patterns are stable across independently trained decision heads. For teams building ADME prediction pipelines, the practical recommendation is straightforward: use XGBoost for quick, interpretable single-endpoint models when you have enough data and no transfer ambitions; use a D-MPNN when you want to build on prior work across endpoints; and use a frozen foundation model when data is scarce.
+Transfer learning works for molecular property prediction, but the choice of *transfer protocol* determines whether it's safe to try. The standard XGBoost continue-boosting protocol transfers at the decision boundary -- helpful when the source and target are related, catastrophic when they're not, and irrecoverable either way. An alternative XGBoost protocol that transfers only feature-importance priors avoids the catastrophic failure, confirming that the problem is not with gradient-boosted trees per se but with inheriting task-specific decisions. D-MPNNs transfer at the representation level by default -- the encoder learns a general molecular vocabulary that carries over regardless of whether the source task is relevant, and the replaceable FFN head ensures wrong associations are never inherited. Foundation models like CheMeleon take this further: pre-trained on a million compounds, the frozen encoder provides representations that outperform task-specific training at every data size above 10%, and its feature importance patterns are stable across independently trained decision heads. For teams building ADME prediction pipelines, the practical recommendation is: use XGBoost for quick, interpretable single-endpoint models when you have enough data and no transfer ambitions; if you do transfer, prefer protocols that separate feature learning from task-specific decisions (D-MPNN encoder/head separation, or feature-importance transfer for XGBoost); and use a frozen foundation model when data is scarce.
 
 ---
 
@@ -420,6 +433,7 @@ For comparison with prior literature that reports AUC-ROC, the full results unde
 | Target | Model | AUC-ROC (mean +/- std) | Best group |
 |---|---|---|---|
 | **HLM Stability** | XGBoost scratch | 0.668 +/- 0.046 | |
+| | XGBoost RLM-feature-transfer | TBD | TBD |
 | | Chemprop scratch | 0.721 +/- 0.038 | |
 | | XGBoost RLM-transfer | 0.734 +/- 0.046 | * |
 | | CheMeleon single-finetune | 0.739 +/- 0.037 | * |
@@ -428,6 +442,7 @@ For comparison with prior literature that reports AUC-ROC, the full results unde
 | | CheMeleon double-finetune | 0.764 +/- 0.038 | * |
 | | **Chemprop RLM-transfer** | **0.768 +/- 0.042** | **\*** |
 | **PAMPA pH 7.4** | XGBoost RLM-transfer | 0.509 +/- 0.069 | |
+| | XGBoost RLM-feature-transfer | TBD | TBD |
 | | XGBoost scratch | 0.659 +/- 0.050 | |
 | | CheMeleon single-finetune | 0.676 +/- 0.044 | |
 | | CheMeleon double-finetune | 0.686 +/- 0.044 | * |

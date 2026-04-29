@@ -213,7 +213,7 @@ def _(
                     _test_y = _y_test.reshape(-1, 1).astype(float)
 
                     _n = len(_train_smi)
-                    _n_val = max(1, int(_n * 0.1))
+                    _n_val = max(2, int(_n * 0.1))
                     _perm = np.random.default_rng(42).permutation(_n)
                     _train_data = [
                         chemprop_data.MoleculeDatapoint.from_smi(
@@ -232,17 +232,25 @@ def _(
                         for s, y in zip(_test_smi, _test_y)
                     ]
 
+                    # Chemprop's build_dataloader uses drop_last=True when
+                    # len(dataset) > batch_size, which produces zero batches
+                    # for a 1-sample dataset at batch_size=64. Cap batch size
+                    # to dataset length to avoid empty loaders.
+                    _bs_train = min(64, len(_train_data))
+                    _bs_val = min(64, len(_val_data))
+                    _bs_test = min(64, len(_test_data))
+
                     _train_ds = chemprop_data.MoleculeDataset(_train_data, _featurizer)
                     _val_ds = chemprop_data.MoleculeDataset(_val_data, _featurizer)
                     _test_ds = chemprop_data.MoleculeDataset(_test_data, _featurizer)
                     _train_loader = chemprop_data.build_dataloader(
-                        _train_ds, num_workers=0, batch_size=64
+                        _train_ds, num_workers=0, batch_size=_bs_train
                     )
                     _val_loader = chemprop_data.build_dataloader(
-                        _val_ds, num_workers=0, shuffle=False, batch_size=64
+                        _val_ds, num_workers=0, shuffle=False, batch_size=_bs_val
                     )
                     _test_loader = chemprop_data.build_dataloader(
-                        _test_ds, num_workers=0, shuffle=False, batch_size=64
+                        _test_ds, num_workers=0, shuffle=False, batch_size=_bs_test
                     )
 
                     _mp = nn.BondMessagePassing()
