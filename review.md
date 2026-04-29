@@ -14,6 +14,8 @@ The core claim is that the *architectural difference* (where knowledge lives) is
 
 **The Chemprop "shrugging off" irrelevant transfer is conflated with the encoder potentially being helpful.**
 
+- resolved
+
 On PAMPA, Chemprop RLM-transfer scores 0.925 vs. scratch 0.917 -- a +0.008 delta that is not significant. The text frames this as "the encoder's features are general enough to be useful for any property." But the null hypothesis -- that irrelevant pre-training simply doesn't help and the model recovers to scratch performance -- is equally consistent with the data. You cannot distinguish "the RLM encoder features are useful for PAMPA" from "the RLM encoder features are neither helpful nor harmful, and the model just trains through them." The feature importance analysis (sulfur elevation) is suggestive but not dispositive, because you show a single fold and the overall performance delta is noise-level.
 
 **The SHAP / saliency analysis is presented with more causal confidence than it supports.**
