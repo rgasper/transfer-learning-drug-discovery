@@ -8,9 +8,7 @@ Transfer learning is a common technique: train a model on a large dataset first,
 
 The answer to that question depends on how you transfer: specifically, *where* in the model the inherited knowledge lives. In these experiments, we'll demonstrate that a graph neural network pre-trained on an unrelated assay performs just as well as one trained from scratch -- it simply ignores the irrelevant pre-training (we'll also discuss why one would do that). A gradient-boosted tree model using the standard continue-boosting transfer protocol on the same unrelated data collapses to random-chance performance, effectively erasing what it could have learned from the target data. The difference is not about "trees vs. neural networks" per se -- it comes from whether the transfer protocol inherits task-specific *decisions* that cannot be unlearned, or task-general *representations* that can be repurposed. We test this distinction explicitly: an alternative XGBoost transfer protocol that inherits only the source model's feature-importance priors (not its decision trees) avoids the catastrophic failure entirely.
 
-The experiments use three NCATS ADME endpoints and compare architectures that differ in where knowledge transfer occurs: XGBoost on Morgan fingerprints, a small Chemprop D-MPNN, and CheMeleon (a larger D-MPNN foundation model pre-trained on 1M compounds). The statistical methodology follows Walters <sup>[4][5][6]</sup>: chemical space splits, 5x5 replicated cross-validation, and Tukey HSD family-wise error control.
-
-The short version: transfer learning helps everyone when the source and target share underlying biochemistry. When they don't, the standard XGBoost continue-boosting protocol catastrophically fails while D-MPNN architectures and feature-importance-based XGBoost transfer shrug it off. The reason is about *what* gets transferred -- inherited decisions vs. inherited representations or feature priors -- and the SHAP analysis makes the mechanism visible at the substructure level.
+The experiments use three NCATS ADME endpoints and compare architectures that differ in where knowledge transfer occurs: XGBoost on Morgan fingerprints, a small Chemprop D-MPNN, and CheMeleon (a larger D-MPNN foundation model pre-trained on 1M compounds). The statistical methodology follows Walters <sup>[4][5][6]</sup>: chemical space splits, 5x5 replicated cross-validation, and Tukey HSD family-wise error control. Transfer learning helps everyone when the source and target share underlying biochemistry; when they don't, the standard XGBoost continue-boosting protocol catastrophically fails while D-MPNN architectures and feature-importance-based XGBoost transfer shrug it off. The SHAP analysis makes the mechanism visible at the substructure level.
 
 ## How the Models Work (A Primer)
 
@@ -89,7 +87,7 @@ For the transfer comparison to be interpretable, we need to understand how well 
 
 ![RLM base model comparison](docs/figures/rlm-base-comparison.png)
 
-*Left: AUC-PR distributions for each architecture on RLM (5x5 CV, 25 folds). Dotted line = random baseline (0.298). Right: Tukey HSD (FWER = 0.05). XGBoost (red) is significantly worse than the D-MPNN reference.*
+*Left: AUC-PR distributions for each architecture on RLM (5x5 CV, 25 folds). Dotted line = random baseline (0.298). Right: Tukey HSD (FWER = 0.05). Reference = Chemprop RLM-transfer (highest mean). XGBoost (red) is significantly worse than the reference; Chemprop and CheMeleon are statistically indistinguishable.*
 
 XGBoost on Morgan fingerprints underperforms both D-MPNN architectures on RLM (Tukey HSD, FWER = 0.05) and shows substantially higher variance across folds. Chemprop and CheMeleon are statistically indistinguishable from each other and produce tighter, more stable estimates across the structurally varied folds and repeats. Keep this asymmetry in mind for the transfer results that follow -- the XGBoost source model is the weakest of the three, which constrains how we interpret both its successes and its failures after transfer.
 
@@ -146,7 +144,7 @@ Key pairwise comparisons (Tukey HSD, FWER = 0.05):
 - Chemprop RLM-transfer vs CheMeleon frozen single: not significant
   (p = 0.96). The top models are statistically indistinguishable.
 - Chemprop RLM-transfer vs Chemprop scratch: significant (p = 0.022).
-  Transfer learning helps.
+  RLM pre-training helps Chemprop.
 - Chemprop RLM-transfer vs XGBoost scratch: significant (p < 0.001).
   Largest gap.
 
@@ -186,11 +184,11 @@ PAMPA pH 7.4 measures passive membrane permeability via an artificial phospholip
 
 *Scatter of continuous endpoint values for the 985 compounds shared between RLM and PAMPA (uncensored in both). No correlation -- these endpoints measure fundamentally different physical processes.*
 
-While the target variables are highly uncorrelated, RLM and PAMPA share 99.5% of molecules (same compound library), making this a strong test: any benefit from transfer must come from representation learning - building an effective understanding of chemical groups and their relationships. And any harm must come from *wrong* learned decisions about how a specific chemical group in the dataset correlates with the target variable being inherited.
+While the target variables are highly uncorrelated, RLM and PAMPA share 99.5% of molecules (same compound library), making this a strong test: any benefit from transfer would have to come from representation learning -- building an effective understanding of chemical groups and their relationships. And any harm would have to come from inherited learned decisions that associate specific chemical groups with the wrong target variable.
 
 | Pair        | Shared Molecules | % of Smaller Set | Shared Scaffolds | % of Smaller Set |
 | ----------- | ---------------- | ---------------- | ---------------- | ---------------- |
-| RLM ∩ PAMPA | 2,023            | 99.5%            | 1,385            | 99.6%\           |
+| RLM ∩ PAMPA | 2,023            | 99.5%            | 1,385            | 99.6%            |
 
 ### Results across all architectures
 
@@ -212,7 +210,7 @@ So, how'd the models perform against the PAMPA target, with and without transfer
 
 ![PAMPA boxplots](docs/figures/boxplots-pampa-auc-pr.png)
 
-*AUC-PR distributions across 25 CV folds. Dotted line = random baseline (positive class prevalence, 0.855). XGBoost RLM-transfer sits at the baseline -- no better than guessing the majority class.*
+*AUC-PR distributions across 25 CV folds. Dotted line = random baseline (positive class prevalence, 0.855). XGBoost RLM-transfer sits at or below the baseline -- no better than guessing the majority class.*
 
 ![Tukey HSD PAMPA](docs/figures/tukey-hsd-pampa-auc-pr.png)
 
@@ -289,30 +287,32 @@ This pattern is not specific to the RLM→PAMPA direction. A [reverse transfer e
 
 ### The elephant in the room: why not just use XGBoost?
 
-Look at the PAMPA results again. XGBoost scratch scores 0.910 AUC-PR. Chemprop RLM-transfer -- the best model, after pre-training on a related endpoint, training a 318K-parameter neural network, and carefully managing the transfer protocol -- scores 0.925. That's a 0.015 improvement, not statistically significant. CheMeleon frozen, a 9.3M-parameter foundation model pre-trained on 1M compounds, scores 0.922 -- roughly 3,000x the parameters of XGBoost for statistically indistinguishable results. On HLM, the gap is wider (0.747 vs 0.831), but XGBoost with RLM decision-boundary transfer (0.806) is competitive with Chemprop scratch (0.793).
+The question is not which model scores highest on a leaderboard -- it's which model is safest to deploy in a pipeline where you can't always verify your pre-training choices. The most practically dangerous scenario in pharmaceutical ML is not "my model is 2% worse than optimal" -- it's "my model silently catastrophically fails because someone upstream picked the wrong pre-training data." That's what we demonstrated with XGBoost's continue-boosting protocol on PAMPA: not a graceful degradation, but a collapse to random chance.
 
-So: why bother with graph neural networks at all?
+To be clear about what this section is *not* arguing: on these datasets, at this scale, the peak performance difference between XGBoost and D-MPNNs is small. XGBoost scratch scores 0.910 AUC-PR on PAMPA; Chemprop RLM-transfer scores 0.925 -- a 0.015 improvement, not statistically significant. CheMeleon frozen, a 9.3M-parameter foundation model, scores 0.922 for statistically indistinguishable results. On HLM, the gap is wider (0.747 vs 0.831), but XGBoost with RLM decision-boundary transfer (0.806) is competitive with Chemprop scratch (0.793). A medicinal chemist making go/no-go decisions would get similar value from a well-tuned XGBoost on Morgan fingerprints as from a D-MPNN, for most compounds. The XGBoost model trains in single-digit seconds, requires no GPU, has mature interpretability tooling (SHAP), and is easy to deploy. These are real advantages, and the question is real -- D-MPNNs are harder to work with and more expensive than a much simpler XGBoost model, with no clear performance advantage on a single endpoint.
 
-The honest answer is that *on these datasets, at this scale*, the practical performance difference is small. A medicinal chemist making go/no-go decisions would get similar value from a well-tuned XGBoost on Morgan fingerprints as from a D-MPNN, for most compounds. The XGBoost model trains in single-digit seconds, requires no GPU, has mature interpretability tooling (SHAP), and is easy to deploy.These are real advantages. While these specific neural networks are also quite small and train in only a few minutes, the question is real - they are harder to work with and more expensive than a much simpler XGBoost model, with no clear performance advantage.
+But the results reveal a different argument for D-MPNN architectures, one that has nothing to do with peak accuracy:
 
-But the results reveal a more subtle argument for the D-MPNN architectures, one that has nothing to do with peak accuracy on a leaderboard:
-
-1. **Robustness to bad transfer.** The most practically dangerous
-   scenario in pharmaceutical ML is not "my model is 2% worse than
-   optimal" -- it's "my model silently catastrophically fails on a
-   subset of compounds." XGBoost's continue-boosting transfer protocol on PAMPA doesn't just
-   underperform; it drops to the *random baseline*. This happens because
-   inherited decision boundaries cannot be unlearned. The
-   feature-importance transfer protocol for XGBoost avoids this failure
-   entirely -- but it also provides no benefit when the source *is*
-   related (HLM: +0.001, p = 0.90). Safety without utility is a poor
-   trade. D-MPNN representation transfer is the only protocol that is
-   both safe on unrelated sources and beneficial on related ones. In a real drug
-   discovery pipeline, you often don't know in advance whether your
-   pre-training source is mechanistically related to your target.
-   Representation-level transfer gives you the best expected outcome
-   across this uncertainty: you gain from related sources and lose nothing
-   from unrelated ones.
+1. **Robustness to bad transfer.** XGBoost's continue-boosting transfer
+   protocol on PAMPA doesn't just underperform; it drops to the *random
+   baseline*. This happens because inherited decision boundaries cannot
+   be unlearned. The feature-importance transfer protocol for XGBoost
+   avoids this failure entirely -- but it also provides no benefit when
+   the source *is* related (HLM: +0.001, p = 0.90). Safety without
+   utility is a poor trade. D-MPNN representation transfer is the only
+   protocol that is both safe on unrelated sources and beneficial on
+   related ones. In a real drug discovery pipeline, you often don't know
+   in advance whether your pre-training source is mechanistically related
+   to your target. Representation-level transfer gives you the best
+   expected outcome across this uncertainty: you gain from related sources
+   and lose nothing from unrelated ones. We cannot claim from this
+   experiment that "more pre-training data always helps" -- but we have
+   disproved its inverse. Additional pre-training on unrelated data does
+   not make D-MPNN models worse. The broader ML landscape (the rise of
+   LLMs, foundation models in vision, etc.) suggests "more data, better
+   representations" is generally true; what we show here is the weaker
+   but still practically important result that representation-level
+   transfer is at minimum *safe*.
 
 2. **Stability across data splits.** The [RLM base model
    comparison](#validating-the-starting-point) reveals that XGBoost's

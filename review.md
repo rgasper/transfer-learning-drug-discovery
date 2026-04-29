@@ -58,21 +58,31 @@ The data efficiency curves are shown only for RLM. The argument that "CheMeleon 
 
 **The opening buries the lede in hedges.**
 
+- resolved: acknowledged but declined. The informal tone is intentional -- this is not a journal paper. The "(yes)" parentheticals are part of the voice.
+
 The first paragraph of the README says "(yes)" and "(yes)" parenthetically, then launches into a lengthy setup. The reader doesn't learn what the actual finding is until paragraph 3. The document would benefit from a clearer abstract-style opening: "We show that [specific claim], demonstrated by [specific evidence], with implications for [specific practice]."
 
 **Story 1 and Story 2 repeat substantial background material.**
+
+- resolved: acknowledged but declined. The repeated material is only a sentence or two in each case, and each story should be readable on its own without requiring the reader to scroll back to Setup.
 
 The "Why we expect it to work/fail" sections in both stories repeat the biochemistry explanations from the Setup section nearly verbatim. The RLM/HLM/PAMPA descriptions appear in the Setup, in Story 1, in Story 2, and again in the Methods Appendix. This repetition dilutes the narrative rather than reinforcing it.
 
 **The "elephant in the room" section undermines its own framing.**
 
+- resolved: reframed the section to lead with the safety/robustness question ("the question is not which model scores highest -- it's which model is safest to deploy") rather than opening with the performance concession. The performance context now follows as honest acknowledgment rather than the opening move. Also added language clarifying we haven't proven "more data always helps" but have disproved "more data can hurt" for representation-level transfer.
+
 This section asks "why not just use XGBoost?" and then spends 5 numbered points arguing for D-MPNNs. But it opens by conceding the performance gap is small and not statistically significant. The framing implies the question is about peak accuracy, then pivots to robustness/composability/data-efficiency arguments. It would be more honest and more persuasive to lead with: "The question is not which model scores highest on a leaderboard -- it's which model is safest to deploy in a pipeline where you can't always verify your pre-training choices."
 
 **Point 1 under "elephant in the room" makes an unsupported claim at the end.**
 
+- resolved: the "diverse targets" sentence was removed in a prior revision. Point 1 now explicitly scopes the claim: "We cannot claim from this experiment that 'more pre-training data always helps' -- but we have disproved its inverse."
+
 The sentence "Additional training on diverse chemical matter and against diverse targets forces the models to learn diverse and generalizable stories about how chemical structure impacts predictions against various targets, and does not cause worse performance" is not demonstrated anywhere in this work. You tested transfer from one source to two targets. "Diverse targets" is not part of the experimental design.
 
 **Point 4 about "real chemistry" is a non sequitur in that list.**
+
+- resolved: the section is reframed as "why bother with D-MPNNs" (not purely about transfer safety), so data efficiency and foundation model properties are legitimate answers to that question.
 
 The data efficiency results are interesting and relevant, but they're about foundation model pretraining, not about the transfer learning safety argument that the section is making. The CheMeleon frozen feature importance discussion is also shoehorned in here rather than given its own section.
 
@@ -81,24 +91,34 @@ The data efficiency results are interesting and relevant, but they're about foun
 ## 4. Smaller Issues and Inaccuracies
 
 - **Line 9**: "collapses to be as bad simple random-chance" -- missing "as" ("as bad as simple random-chance").
+  - resolved: text was rewritten in earlier edits; typo no longer exists.
 
 - **Line 88**: The figure caption says "XGBoost (red) is significantly worse than the D-MPNN reference" but the text says Chemprop and CheMeleon are indistinguishable. Clarify which model is the reference in the caption.
+  - resolved: caption now specifies "Reference = Chemprop RLM-transfer (highest mean)" and explicitly states Chemprop and CheMeleon are indistinguishable.
 
 - **Line 133**: "The Chemprop improvement is statistically significant (p = 0.022, Tukey HSD)" -- this p-value is for the pairwise comparison Chemprop-transfer vs. Chemprop-scratch. Make this explicit; as written it's ambiguous whether the p-value refers to the XGBoost improvement or the Chemprop improvement.
+  - resolved: bullet now reads "RLM pre-training helps Chemprop" to clarify the comparison.
 
 - **Line 146**: "Pearson r=0.54 on n=27" -- this is a borderline meaningless correlation on 27 points. The 95% CI for r would span roughly 0.2 to 0.75. Reporting it as "weak" without the confidence interval overstates the precision of the estimate.
+  - resolved: addressed in the "shared structural rules" rewrite (95% CI now reported).
 
 - **Line 180**: "any harm must come from *wrong* learned decisions about how a specific chemical group in the dataset correlates with the target variable being inherited" -- this pre-states the conclusion before presenting the evidence. The reader hasn't seen the PAMPA results yet at this point.
+  - resolved: reworded to conditional ("would have to come from") to frame it as a prediction rather than a stated conclusion.
 
 - **Line 205**: "XGBoost RLM-transfer sits at the baseline -- no better than guessing the majority class" -- the AUC-PR is 0.853 vs. baseline 0.855, so it's actually *below* the majority-class baseline. "At or below" (as written in the text above) is more accurate than "at."
+  - resolved: caption now says "at or below the baseline."
 
 - **Line 267**: "These are real advantages. While these specific neural networks..." -- abrupt transition; the period between these sentences breaks the thought flow.
+  - resolved: section was rewritten; the abrupt transition no longer exists.
 
 - **Table on line 184**: There's a stray backslash after "99.6%" in the scaffold column.
+  - resolved: backslash removed.
 
 - **The ablation doc (xgb-transfer-ablation.md) reports AUC-PR 0.917 for scratch** but the main README reports 0.910. These should be reconciled -- likely different configurations or a typo, but the inconsistency is confusing.
+  - resolved: added a note to the ablation doc explaining the minor difference is run-to-run variance from XGBoost's stochastic subsampling.
 
 - **The chemeleon-overfitting.md reports AUC-ROC values** (0.676, 0.701, 0.739, 0.768, 0.730, 0.716) while the main README reports AUC-PR. The supplementary doc should clarify which metric is being discussed, or ideally report both to match the main text.
+  - resolved: added a metric note at the top of the doc clarifying all values are AUC-ROC.
 
 ---
 

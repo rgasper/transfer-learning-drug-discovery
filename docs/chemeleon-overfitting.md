@@ -1,5 +1,10 @@
 # CheMeleon Overfitting: From Counterintuitive Results to Frozen Encoders
 
+> **Metric note:** All "AUC" values in this document refer to AUC-ROC. The
+> main README reports AUC-PR as the primary metric. The qualitative story
+> is the same under both metrics; AUC-ROC is used here because it was the
+> metric we were tracking during the initial investigation.
+
 When we first trained CheMeleon (9.3M parameters) with full finetuning on
 these small ADME datasets, the results were counterintuitive: the
 foundation model performed *worse* than a randomly-initialized Chemprop
