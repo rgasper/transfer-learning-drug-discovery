@@ -312,7 +312,7 @@ At 1% (~20 compounds), all three architectures are near the random baseline and 
 
 ### The elephant in the room: why not just use XGBoost?
 
-That was a lot of hooplah showing that, for these datasets, much more complex models produce results with are statistically indistinguishable from the tried-and-true standard of drug discovery ML models, Fingerprints + XGBoost. So, why bother with the more complex stuff?
+That was a lot of hooplah showing that, for these datasets, much more complex models produce results which are often statistically indistinguishable from the tried-and-true standard of drug discovery ML models, Fingerprints + XGBoost. So, why bother with the more complex stuff?
 
 The question is not which model scores highest on a leaderboard -- it's which model is safest to deploy in a pipeline where you can't always verify your pre-training choices. The most practically dangerous scenario in pharmaceutical ML is not "my model is 2% worse than optimal" -- it's "my model silently catastrophically fails because someone upstream picked the wrong pre-training data." That's what we demonstrated with XGBoost's continue-boosting protocol on PAMPA: not a graceful degradation, but a collapse to random chance.
 
