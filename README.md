@@ -1,6 +1,6 @@
 # Transfer Learning for Drug Discovery Primer
 
-Disclaimer / slop warning - The code generating the results and much of the first draft of this document was written by AI. I've reviewed it, but initial drafts were full of errors and I may have missed something. In particular, I am not a biochemist nor have experience working with ADME assay data, so my efforts at auditing sections dicusssing those directly may not have resulted in me catching errors which could appear obvious to someone who has more experience in those domains.
+> Disclaimer / slop warning - The code generating the results and much of the first draft of this document was written by AI. I've reviewed it, but initial drafts were full of errors and I may have missed something. In particular, I am not a biochemist nor have experience working with ADME assay data, so my efforts at auditing sections dicusssing those directly may not have resulted in me catching errors which could appear obvious to someone who has more experience in those domains.
 
 This codebase explores a practical question: does transfer learning help for ADME (Absorption, Distribution, Metabolism and Excretion) prediction (yes), and does it matter what model type you use and how you perform that knowlege transfer (yes), and why? It also serves as an introductory explainer for curious (and skeptical) scientists to transfer learning for machine learning models in small molecule drug discovery. The background context, and experiment to address some core questions, and the findings are discussed in detail in this document.
 
