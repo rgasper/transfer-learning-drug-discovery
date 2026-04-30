@@ -1,4 +1,4 @@
-# Transfer Learning for Drug Discovery: NCATS ADME
+# Transfer Learning for Drug Discovery Primer
 
 Disclaimer / slop warning - The code generating the results and much of the first draft of this document was written by AI. I've reviewed it, but initial drafts were full of errors and I may have missed something. In particular, I am not a biochemist nor have experience working with ADME assay data, so my efforts at auditing sections dicusssing those directly may not have resulted in me catching errors which could appear obvious to someone who has more experience in those domains.
 
