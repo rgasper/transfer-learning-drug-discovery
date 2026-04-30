@@ -88,7 +88,7 @@ The two transfer targets test a clear hypothesis:
 
 ### Validating the starting point
 
-For the transfer comparison to be interpretable, we need to understand how well each architecture learns the RLM source task. We evaluated all three base architectures on RLM using the same 5x5 CV protocol:
+For the transfer comparison to be interpretable, we need to understand how well each architecture learns the RLM source task. We evaluated all three base architectures on RLM using 5 replicates of 5-fold grouped cross-validation (25 train/test splits total, shared across all models; see [Cross-validation protocol](#cross-validation-protocol-and-statistical-testing) in the Methods Appendix for details).
 
 ![RLM base model comparison](docs/figures/rlm-base-comparison.png)
 
@@ -445,6 +445,12 @@ RLM and PAMPA show clear separation: cross-fold 5-NN distances are substantially
 | PAMPA pH 7.4 | 0.252 | 0.111 -- 0.445 |
 
 Even the most overlapping fold pair across replicates shares only ~25% of molecules on average. The 5 replicates produce meaningfully different partitions, which is why the 5x5 CV provides 25 non-redundant performance estimates for statistical testing.
+
+### Cross-validation protocol and statistical testing
+
+Each experiment uses 5 replicates of 5-fold grouped cross-validation (5x5 CV), producing 25 train/test splits per endpoint. Within each split, one fold is held out as the test set and the remaining four folds form the training set. Models are trained on the training set and evaluated on the held-out fold, yielding one AUC-PR score per split. The same 25 splits are shared across all model variants for a given endpoint, so performance differences between models on a given fold reflect the model rather than the data partition. For transfer-learning experiments, the source model (e.g., RLM) is trained on the full source dataset (no splitting), and transfer/finetuning occurs on the target endpoint's training folds; the held-out fold is never seen during any stage of training.
+
+The 25 scores per model variant are compared using one-way ANOVA followed by Tukey's Honest Significant Difference (HSD) test, which controls the family-wise error rate (FWER) at 0.05 across all pairwise comparisons. This means that each reported significant difference has at most a 5% probability of being a false positive, even after accounting for the number of model pairs being compared. Models whose confidence intervals overlap with the best-performing model are reported as members of the "best group" (marked with \* in the results tables). Throughout the document, "significant" means p < 0.05 under Tukey HSD with FWER control unless otherwise noted.
 
 ### Metric choice: AUC-PR over AUC-ROC
 
