@@ -14,7 +14,7 @@ Understanding both the results and the experimental setup requires a basic grasp
 
 ### XGBoost: decisions on fixed features
 
-XGBoost takes a molecule, converts it to a fixed fingerprint (in this case, a 2048-bit binary vector where each bit indicates whether a particular substructure pattern is present), and builds an ensemble of decision trees. Each tree asks a different sequence of yes/no questions about which fingerprint bits are on or off, arriving at a prediction for that tree. The final answer is the sum of all trees' predictions.
+First we take a molecule and convert it into industry standard Morgan Finerpints (a 2048-bit binary vector, each bit indicating the presence of absence of some particular chemical substructure). XGBoost takes this fingerprint and builds from it an ensemble of decision trees. Each tree asks a different sequence of yes/no questions about which fingerprint bits are on or off, arriving at a prediction for that tree. The final answer is the sum of all trees' predictions.
 
 ![XGBoost architecture](docs/figures/diagram-xgb-architecture.svg)
 
