@@ -1,6 +1,7 @@
 # Try 1
 
 These numbers are crazy. IDK where these sites are getting info from but it doesn't agree with official nvidia spec sheets
+ah okay I made some unit conversion errors. these third party sites report prices in Flop/s*$; what even is that
  
 ## 2026
 
