@@ -11,11 +11,18 @@ def _():
     mo.md("""
     # 15 — Data Efficiency: How Much Data Do You Need?
 
-    Trains XGBoost scratch, Chemprop scratch, and CheMeleon frozen
-    single-finetune on 1%, 10%, 25%, 50%, 75%, and 100% of the training
-    data for each endpoint (RLM, HLM, PAMPA). Tests whether the advantage
-    of learned representations grows with less data across mechanistically
-    diverse endpoints.
+    Trains XGBoost scratch, Chemprop scratch, CheMeleon frozen
+    single-finetune, and MIST frozen single-finetune on 1%, 10%, 25%, 50%,
+    75%, and 100% of the training data for each endpoint (RLM, HLM,
+    PAMPA). Tests whether the advantage of learned representations grows
+    with less data across mechanistically diverse endpoints.
+
+    MIST is a 28M-parameter SMILES transformer (RoBERTa-PreLayerNorm,
+    MLM-pretrained on Enamine REAL Space). Because its encoder is frozen
+    here, [CLS] embeddings are deterministic and pre-computed once per
+    SMILES via ``scripts/run-mist-embed.py``. The data-efficiency loop
+    then trains only a Chemprop-matched FFN head on the cached
+    embeddings.
     """)
     return (mo,)
 
@@ -41,10 +48,26 @@ def _():
     CHECKPOINTS_DIR = Path("checkpoints")
     FIGURES_DIR = Path("docs/figures")
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _pick_accelerator() -> tuple[str, int]:
+        """Return (accelerator, devices) appropriate for Lightning Trainer."""
+        if torch.cuda.is_available():
+            return "gpu", 1
+        if torch.backends.mps.is_available():
+            return "mps", 1
+        return "cpu", 1
+
+    LIGHTNING_ACCELERATOR, LIGHTNING_DEVICES = _pick_accelerator()
+    logger.info(
+        f"Using Lightning accelerator={LIGHTNING_ACCELERATOR} "
+        f"devices={LIGHTNING_DEVICES}"
+    )
     return (
         CHECKPOINTS_DIR,
         DATA_DIR,
         FIGURES_DIR,
+        LIGHTNING_ACCELERATOR,
+        LIGHTNING_DEVICES,
         average_precision_score,
         chemprop_data,
         featurizers,
@@ -64,7 +87,7 @@ def _():
 
 @app.cell
 def _(CHECKPOINTS_DIR, DATA_DIR, logger, np, torch):
-    """Load data for all three endpoints and CheMeleon encoder."""
+    """Load data for all three endpoints, CheMeleon encoder, and MIST embeddings."""
     import json
 
     with open(DATA_DIR / "split_config.json") as _f:
@@ -73,16 +96,37 @@ def _(CHECKPOINTS_DIR, DATA_DIR, logger, np, torch):
     _fp_data = np.load(DATA_DIR / "morgan_fps_2048_r3.npz", allow_pickle=True)
     global_fps = _fp_data["fp_matrix"]
 
+    # Load MIST embeddings (run scripts/run-mist-embed.py first if missing)
+    _mist_path = DATA_DIR / "mist_embeddings.npz"
+    if not _mist_path.exists():
+        raise FileNotFoundError(
+            f"MIST embedding cache not found at {_mist_path}. "
+            "Run `uv run python scripts/run-mist-embed.py` first."
+        )
+    _mist_data = np.load(_mist_path, allow_pickle=True)
+    mist_smiles_to_idx = {str(s): i for i, s in enumerate(_mist_data["smiles"])}
+    mist_embeddings = _mist_data["embeddings"]  # (N_unique, hidden_size)
+    logger.info(
+        f"MIST embeddings: {mist_embeddings.shape} "
+        f"covering {len(mist_smiles_to_idx)} unique SMILES"
+    )
+
     # Load all three endpoints
     endpoint_data = {}
     for _endpoint, _baseline in [("rlm", 0.298), ("hlm", 0.602), ("pampa", 0.855)]:
         _split = np.load(DATA_DIR / f"{_endpoint}_splits.npz", allow_pickle=True)
+        _smi_list = list(_split["smiles"])
+        # Per-endpoint MIST embedding matrix, aligned to the endpoint's SMILES order.
+        _mist_idx = np.array(
+            [mist_smiles_to_idx[str(s)] for s in _smi_list], dtype=np.int64
+        )
         endpoint_data[_endpoint] = {
-            "smiles": list(_split["smiles"]),
+            "smiles": _smi_list,
             "labels": _split["labels"],
             "folds": _split["folds"],
             "fp_indices": _split["fp_indices"],
             "X": global_fps[_split["fp_indices"]],
+            "X_mist": mist_embeddings[_mist_idx],
             "baseline": _baseline,
         }
         logger.info(
@@ -101,6 +145,8 @@ def _(CHECKPOINTS_DIR, DATA_DIR, logger, np, torch):
 @app.cell
 def _(
     DATA_DIR,
+    LIGHTNING_ACCELERATOR,
+    LIGHTNING_DEVICES,
     average_precision_score,
     chemeleon_mp_params,
     chemeleon_mp_state,
@@ -121,6 +167,84 @@ def _(
     """Run data efficiency experiment across all endpoints, fractions, and models."""
     import copy
 
+    def _train_mist_head(
+        x_train: np.ndarray,
+        y_train: np.ndarray,
+        x_val: np.ndarray,
+        y_val: np.ndarray,
+        x_test: np.ndarray,
+        seed: int,
+        max_epochs: int = 30,
+        batch_size: int = 64,
+        lr: float = 1e-3,
+        patience: int = 5,
+    ) -> np.ndarray:
+        """Train a Chemprop-shaped FFN head on cached MIST [CLS] embeddings.
+
+        Mirrors ``chemprop.nn.BinaryClassificationFFN`` defaults so the
+        result is comparable to Chemprop / CheMeleon frozen runs:
+        Linear(d -> 300) -> ReLU -> Linear(300 -> 1) -> Sigmoid, BCE loss.
+
+        The MIST encoder is not part of this module: we operate on the
+        pre-computed [CLS] embeddings, so each (rep, fold, fraction) call
+        only optimises 154k parameters on a few hundred to a few thousand
+        examples.
+
+        Returns predicted probabilities for ``x_test`` of shape (N_test,).
+        """
+        torch.manual_seed(seed)
+        device = torch.device("cpu")  # head is tiny; CPU is faster than MPS overhead
+        d_in = x_train.shape[1]
+        head = torch.nn.Sequential(
+            torch.nn.Linear(d_in, 300),
+            torch.nn.ReLU(),
+            torch.nn.Linear(300, 1),
+        ).to(device)
+        opt = torch.optim.Adam(head.parameters(), lr=lr)
+        loss_fn = torch.nn.BCEWithLogitsLoss()
+
+        x_train_t = torch.from_numpy(x_train).float().to(device)
+        y_train_t = torch.from_numpy(y_train).float().to(device)
+        x_val_t = torch.from_numpy(x_val).float().to(device)
+        y_val_t = torch.from_numpy(y_val).float().to(device)
+        x_test_t = torch.from_numpy(x_test).float().to(device)
+
+        n_train = len(x_train_t)
+        best_val = float("inf")
+        best_state = {k: v.detach().clone() for k, v in head.state_dict().items()}
+        epochs_no_improve = 0
+
+        for _epoch in range(max_epochs):
+            head.train()
+            perm = torch.randperm(n_train, generator=torch.Generator().manual_seed(seed + _epoch))
+            for start in range(0, n_train, batch_size):
+                idx = perm[start : start + batch_size]
+                logits = head(x_train_t[idx]).squeeze(-1)
+                loss = loss_fn(logits, y_train_t[idx])
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+
+            head.eval()
+            with torch.no_grad():
+                val_logits = head(x_val_t).squeeze(-1)
+                val_loss = loss_fn(val_logits, y_val_t).item()
+            if val_loss < best_val - 1e-6:
+                best_val = val_loss
+                best_state = {k: v.detach().clone() for k, v in head.state_dict().items()}
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+                if epochs_no_improve >= patience:
+                    break
+
+        head.load_state_dict(best_state)
+        head.eval()
+        with torch.no_grad():
+            test_logits = head(x_test_t).squeeze(-1)
+            test_probs = torch.sigmoid(test_logits).cpu().numpy()
+        return test_probs
+
     _featurizer = featurizers.SimpleMoleculeMolGraphFeaturizer()
     _fractions = [0.01, 0.10, 0.25, 0.50, 0.75, 1.00]
     _n_reps = split_config["n_replicates"]
@@ -133,6 +257,7 @@ def _(
         _labels = _ep_data["labels"]
         _folds_arr = _ep_data["folds"]
         _X = _ep_data["X"]
+        _X_mist = _ep_data["X_mist"]
 
         for _frac in _fractions:
             for _rep in range(_n_reps):
@@ -257,8 +382,8 @@ def _(
                         enable_checkpointing=False,
                         enable_progress_bar=False,
                         deterministic=True,
-                        accelerator="gpu",
-                        devices=1,
+                        accelerator=LIGHTNING_ACCELERATOR,
+                        devices=LIGHTNING_DEVICES,
                         max_epochs=30,
                     )
                     _trainer.fit(_cp_model, _train_loader, _val_loader)
@@ -294,8 +419,8 @@ def _(
                         enable_checkpointing=False,
                         enable_progress_bar=False,
                         deterministic=True,
-                        accelerator="gpu",
-                        devices=1,
+                        accelerator=LIGHTNING_ACCELERATOR,
+                        devices=LIGHTNING_DEVICES,
                         max_epochs=30,
                     )
                     _trainer2.fit(_cm_model, _train_loader, _val_loader)
@@ -313,6 +438,45 @@ def _(
                             "auc_roc": roc_auc_score(_y_test, _y_prob_cm),
                             "avg_precision": average_precision_score(
                                 _y_test, _y_prob_cm
+                            ),
+                        }
+                    )
+
+                    # --- MIST frozen single ---
+                    # Reuse the same train / val split (in subsampled-index
+                    # order) as Chemprop / CheMeleon for fair comparison.
+                    _train_idx_in_sub = _perm[_n_val:]
+                    _val_idx_in_sub = _perm[:_n_val]
+                    _mist_x_train = _X_mist[_sub_indices[_train_idx_in_sub]]
+                    _mist_y_train = _labels[_sub_indices[_train_idx_in_sub]].astype(
+                        np.float32
+                    )
+                    _mist_x_val = _X_mist[_sub_indices[_val_idx_in_sub]]
+                    _mist_y_val = _labels[_sub_indices[_val_idx_in_sub]].astype(
+                        np.float32
+                    )
+                    _mist_x_test = _X_mist[_test_mask]
+
+                    _y_prob_mist = _train_mist_head(
+                        x_train=_mist_x_train,
+                        y_train=_mist_y_train,
+                        x_val=_mist_x_val,
+                        y_val=_mist_y_val,
+                        x_test=_mist_x_test,
+                        seed=42 + _rep * 100 + _fold,
+                    )
+                    _all_results.append(
+                        {
+                            "endpoint": _endpoint_name,
+                            "fraction": _frac,
+                            "pct_label": _pct_label,
+                            "model": "MIST frozen",
+                            "replicate": _rep,
+                            "fold": _fold,
+                            "n_train": _n_sub,
+                            "auc_roc": roc_auc_score(_y_test, _y_prob_mist),
+                            "avg_precision": average_precision_score(
+                                _y_test, _y_prob_mist
                             ),
                         }
                     )
@@ -336,16 +500,18 @@ def _(
 ):
     """Generate 3-panel data efficiency figure (one panel per endpoint)."""
     _fractions = [0.01, 0.10, 0.25, 0.50, 0.75, 1.00]
-    _models = ["XGBoost scratch", "Chemprop scratch", "CheMeleon frozen"]
+    _models = ["XGBoost scratch", "Chemprop scratch", "CheMeleon frozen", "MIST frozen"]
     _colors = {
         "XGBoost scratch": "#FF5722",
         "Chemprop scratch": "#2196F3",
         "CheMeleon frozen": "#7E57C2",
+        "MIST frozen": "#00897B",
     }
     _markers = {
         "XGBoost scratch": "o",
         "Chemprop scratch": "s",
         "CheMeleon frozen": "D",
+        "MIST frozen": "^",
     }
     _endpoint_titles = {
         "rlm": "RLM Stability",
@@ -405,12 +571,13 @@ def _(
                     _best_group[(_ep, _frac, _m)] = not _sig
 
     # --- 3-panel figure ---
-    _fig, _axes = plt.subplots(1, 3, figsize=(18, 6), sharey=False)
+    _fig, _axes = plt.subplots(1, 3, figsize=(20, 6), sharey=False)
 
     _x_offsets = {
-        "XGBoost scratch": -0.008,
-        "Chemprop scratch": 0.0,
-        "CheMeleon frozen": 0.008,
+        "XGBoost scratch": -0.012,
+        "Chemprop scratch": -0.004,
+        "CheMeleon frozen": 0.004,
+        "MIST frozen": 0.012,
     }
 
     for _panel_idx, _ep in enumerate(_endpoint_order):

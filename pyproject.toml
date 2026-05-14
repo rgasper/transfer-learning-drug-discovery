@@ -21,7 +21,16 @@ dependencies = [
     "umap-learn>=0.5.7",
     "useful-rdkit-utils>=0.93.0",
     "xgboost>=2.1.0",
+    "transformers>=4.40.0",
+    "smirk>=0.2.0",
+    "safetensors>=0.4.0",
 ]
+
+[tool.uv]
+# smirk 0.2.0's build-system.requires pins maturin~=1.7, but maturin 1.7+
+# rejects the `./python/smirk/vocab_smiles.json` include pattern that
+# smirk uses. Constrain maturin to <1.7 for smirk's build environment.
+build-constraint-dependencies = ["maturin<1.7"]
 
 [build-system]
 requires = ["hatchling"]
