@@ -12,17 +12,18 @@ def _():
     # 15 — Data Efficiency: How Much Data Do You Need?
 
     Trains XGBoost scratch, Chemprop scratch, CheMeleon frozen
-    single-finetune, and MIST frozen single-finetune on 1%, 10%, 25%, 50%,
-    75%, and 100% of the training data for each endpoint (RLM, HLM,
-    PAMPA). Tests whether the advantage of learned representations grows
-    with less data across mechanistically diverse endpoints.
+    single-finetune, MIST-28M frozen single-finetune, and MIST-1.8B frozen
+    single-finetune on 1%, 10%, 25%, 50%, 75%, and 100% of the training
+    data for each endpoint (RLM, HLM, PAMPA). Tests whether the advantage
+    of learned representations grows with less data across mechanistically
+    diverse endpoints.
 
-    MIST is a 28M-parameter SMILES transformer (RoBERTa-PreLayerNorm,
-    MLM-pretrained on Enamine REAL Space). Because its encoder is frozen
-    here, [CLS] embeddings are deterministic and pre-computed once per
-    SMILES via ``scripts/run-mist-embed.py``. The data-efficiency loop
-    then trains only a Chemprop-matched FFN head on the cached
-    embeddings.
+    MIST is a family of SMILES transformers (RoBERTa-PreLayerNorm,
+    MLM-pretrained on Enamine REAL Space). We evaluate MIST-28M and
+    MIST-1.8B. Because the encoders are frozen here, [CLS] embeddings are
+    deterministic and pre-computed once per SMILES via
+    ``scripts/run-mist-embed.py``. The data-efficiency loop then trains
+    only a Chemprop-matched FFN head on the cached embeddings.
     """)
     return (mo,)
 
@@ -107,9 +108,29 @@ def _(CHECKPOINTS_DIR, DATA_DIR, logger, np, torch):
     mist_smiles_to_idx = {str(s): i for i, s in enumerate(_mist_data["smiles"])}
     mist_embeddings = _mist_data["embeddings"]  # (N_unique, hidden_size)
     logger.info(
-        f"MIST embeddings: {mist_embeddings.shape} "
+        f"MIST-28M embeddings: {mist_embeddings.shape} "
         f"covering {len(mist_smiles_to_idx)} unique SMILES"
     )
+
+    # Load MIST-1.8B embeddings (run scripts/run-mist-embed.py --size 1.8B first)
+    _mist_1b_path = DATA_DIR / "mist_1.8b_embeddings.npz"
+    _has_mist_1b = _mist_1b_path.exists()
+    if _has_mist_1b:
+        _mist_1b_data = np.load(_mist_1b_path, allow_pickle=True)
+        mist_1b_smiles_to_idx = {str(s): i for i, s in enumerate(_mist_1b_data["smiles"])}
+        mist_1b_embeddings = _mist_1b_data["embeddings"]
+        logger.info(
+            f"MIST-1.8B embeddings: {mist_1b_embeddings.shape} "
+            f"covering {len(mist_1b_smiles_to_idx)} unique SMILES"
+        )
+    else:
+        mist_1b_smiles_to_idx = {}
+        mist_1b_embeddings = None
+        logger.warning(
+            f"MIST-1.8B embedding cache not found at {_mist_1b_path}. "
+            "Skipping MIST-1.8B arm. Run "
+            "`uv run python scripts/run-mist-embed.py --size 1.8B` to enable."
+        )
 
     # Load all three endpoints
     endpoint_data = {}
@@ -120,7 +141,7 @@ def _(CHECKPOINTS_DIR, DATA_DIR, logger, np, torch):
         _mist_idx = np.array(
             [mist_smiles_to_idx[str(s)] for s in _smi_list], dtype=np.int64
         )
-        endpoint_data[_endpoint] = {
+        _ep_dict = {
             "smiles": _smi_list,
             "labels": _split["labels"],
             "folds": _split["folds"],
@@ -129,6 +150,14 @@ def _(CHECKPOINTS_DIR, DATA_DIR, logger, np, torch):
             "X_mist": mist_embeddings[_mist_idx],
             "baseline": _baseline,
         }
+        # MIST-1.8B embeddings (optional -- only present after running
+        # scripts/run-mist-embed.py --size 1.8B on a GPU machine).
+        if _has_mist_1b:
+            _mist_1b_idx = np.array(
+                [mist_1b_smiles_to_idx[str(s)] for s in _smi_list], dtype=np.int64
+            )
+            _ep_dict["X_mist_1b"] = mist_1b_embeddings[_mist_1b_idx]
+        endpoint_data[_endpoint] = _ep_dict
         logger.info(
             f"{_endpoint.upper()}: {len(endpoint_data[_endpoint]['smiles'])} molecules, "
             f"positive rate={_split['labels'].mean():.3f}"
@@ -138,8 +167,9 @@ def _(CHECKPOINTS_DIR, DATA_DIR, logger, np, torch):
     chemeleon_mp_params = _cm_data["hyper_parameters"]
     chemeleon_mp_state = _cm_data["state_dict"]
 
+    has_mist_1b = _has_mist_1b
     logger.info(f"CV: {split_config['n_replicates']}x{split_config['n_folds']}")
-    return chemeleon_mp_params, chemeleon_mp_state, endpoint_data, split_config
+    return chemeleon_mp_params, chemeleon_mp_state, endpoint_data, has_mist_1b, split_config
 
 
 @app.cell
@@ -153,6 +183,7 @@ def _(
     chemprop_data,
     endpoint_data,
     featurizers,
+    has_mist_1b,
     lightning_pl,
     logger,
     models,
@@ -258,6 +289,7 @@ def _(
         _folds_arr = _ep_data["folds"]
         _X = _ep_data["X"]
         _X_mist = _ep_data["X_mist"]
+        _X_mist_1b = _ep_data.get("X_mist_1b")  # None if 1.8B cache not available
 
         for _frac in _fractions:
             for _rep in range(_n_reps):
@@ -481,6 +513,36 @@ def _(
                         }
                     )
 
+                    # --- MIST-1.8B frozen single ---
+                    if has_mist_1b and _X_mist_1b is not None:
+                        _mist1b_x_train = _X_mist_1b[_sub_indices[_train_idx_in_sub]]
+                        _mist1b_x_val = _X_mist_1b[_sub_indices[_val_idx_in_sub]]
+                        _mist1b_x_test = _X_mist_1b[_test_mask]
+
+                        _y_prob_mist1b = _train_mist_head(
+                            x_train=_mist1b_x_train,
+                            y_train=_mist_y_train,
+                            x_val=_mist1b_x_val,
+                            y_val=_mist_y_val,
+                            x_test=_mist1b_x_test,
+                            seed=42 + _rep * 100 + _fold,
+                        )
+                        _all_results.append(
+                            {
+                                "endpoint": _endpoint_name,
+                                "fraction": _frac,
+                                "pct_label": _pct_label,
+                                "model": "MIST-1.8B frozen",
+                                "replicate": _rep,
+                                "fold": _fold,
+                                "n_train": _n_sub,
+                                "auc_roc": roc_auc_score(_y_test, _y_prob_mist1b),
+                                "avg_precision": average_precision_score(
+                                    _y_test, _y_prob_mist1b
+                                ),
+                            }
+                        )
+
     efficiency_df = pl.DataFrame(_all_results)
     efficiency_df.write_parquet(DATA_DIR / "data_efficiency_results.parquet")
     logger.info(f"Saved {efficiency_df.height} results")
@@ -492,6 +554,7 @@ def _(
     FIGURES_DIR,
     efficiency_df,
     endpoint_data,
+    has_mist_1b,
     logger,
     mo,
     pairwise_tukeyhsd,
@@ -501,17 +564,21 @@ def _(
     """Generate 3-panel data efficiency figure (one panel per endpoint)."""
     _fractions = [0.01, 0.10, 0.25, 0.50, 0.75, 1.00]
     _models = ["XGBoost scratch", "Chemprop scratch", "CheMeleon frozen", "MIST frozen"]
+    if has_mist_1b:
+        _models.append("MIST-1.8B frozen")
     _colors = {
         "XGBoost scratch": "#FF5722",
         "Chemprop scratch": "#2196F3",
         "CheMeleon frozen": "#7E57C2",
         "MIST frozen": "#00897B",
+        "MIST-1.8B frozen": "#E65100",
     }
     _markers = {
         "XGBoost scratch": "o",
         "Chemprop scratch": "s",
         "CheMeleon frozen": "D",
         "MIST frozen": "^",
+        "MIST-1.8B frozen": "v",
     }
     _endpoint_titles = {
         "rlm": "RLM Stability",
@@ -574,10 +641,11 @@ def _(
     _fig, _axes = plt.subplots(1, 3, figsize=(20, 6), sharey=False)
 
     _x_offsets = {
-        "XGBoost scratch": -0.012,
-        "Chemprop scratch": -0.004,
-        "CheMeleon frozen": 0.004,
-        "MIST frozen": 0.012,
+        "XGBoost scratch": -0.016,
+        "Chemprop scratch": -0.008,
+        "CheMeleon frozen": 0.000,
+        "MIST frozen": 0.008,
+        "MIST-1.8B frozen": 0.016,
     }
 
     for _panel_idx, _ep in enumerate(_endpoint_order):

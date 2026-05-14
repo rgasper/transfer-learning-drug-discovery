@@ -5,20 +5,27 @@ Mirrors the (endpoint, fraction, replicate, fold) loop in
 Loads cached MIST [CLS] embeddings (run ``scripts/run-mist-embed.py`` first)
 and trains a Chemprop-shaped FFN head on top.
 
-Output: ``data/mist_efficiency_results.parquet`` with the same schema as the
-notebook's ``data_efficiency_results.parquet``, which lets you concat them:
+Supports both MIST-28M and MIST-1.8B via the ``--size`` CLI argument.
+
+Output: ``data/mist_efficiency_results.parquet`` (28M) or
+``data/mist_1.8b_efficiency_results.parquet`` (1.8B) with the same schema
+as the notebook's ``data_efficiency_results.parquet``, which lets you
+concat them:
 
     full = pl.concat([
         pl.read_parquet("data/data_efficiency_results.parquet"),
         pl.read_parquet("data/mist_efficiency_results.parquet"),
+        pl.read_parquet("data/mist_1.8b_efficiency_results.parquet"),
     ])
 
 Usage:
-    uv run python scripts/run-mist-data-efficiency.py
+    uv run python scripts/run-mist-data-efficiency.py             # 28M (default)
+    uv run python scripts/run-mist-data-efficiency.py --size 1.8B # 1.8B
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,11 +38,22 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 from typeguard import typechecked
 
 DATA_DIR = Path("data")
-OUTPUT_PATH = DATA_DIR / "mist_efficiency_results.parquet"
-MIST_CACHE_PATH = DATA_DIR / "mist_embeddings.npz"
 SPLIT_CONFIG_PATH = DATA_DIR / "split_config.json"
 ENDPOINT_BASELINES = {"rlm": 0.298, "hlm": 0.602, "pampa": 0.855}
 FRACTIONS = (0.01, 0.10, 0.25, 0.50, 0.75, 1.00)
+
+VARIANTS: dict[str, dict[str, str]] = {
+    "28M": {
+        "cache_filename": "mist_embeddings.npz",
+        "output_filename": "mist_efficiency_results.parquet",
+        "model_label": "MIST frozen",
+    },
+    "1.8B": {
+        "cache_filename": "mist_1.8b_embeddings.npz",
+        "output_filename": "mist_1.8b_efficiency_results.parquet",
+        "model_label": "MIST-1.8B frozen",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -146,10 +164,33 @@ def train_mist_head(
     return test_probs
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run MIST frozen data-efficiency sweep."
+    )
+    parser.add_argument(
+        "--size",
+        choices=list(VARIANTS.keys()),
+        default="28M",
+        help="MIST model size (default: 28M). Must have run "
+        "run-mist-embed.py --size <SIZE> first.",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
-    if not MIST_CACHE_PATH.exists():
+    args = parse_args()
+    variant = VARIANTS[args.size]
+    cache_filename = variant["cache_filename"]
+    output_filename = variant["output_filename"]
+    model_label = variant["model_label"]
+
+    cache_path = DATA_DIR / cache_filename
+    output_path = DATA_DIR / output_filename
+
+    if not cache_path.exists():
         raise FileNotFoundError(
-            f"Missing {MIST_CACHE_PATH}. Run scripts/run-mist-embed.py first."
+            f"Missing {cache_path}. Run scripts/run-mist-embed.py --size {args.size} first."
         )
 
     with open(SPLIT_CONFIG_PATH) as f:
@@ -157,11 +198,11 @@ def main() -> None:
     n_reps = int(split_config["n_replicates"])
     n_folds = int(split_config["n_folds"])
 
-    mist = np.load(MIST_CACHE_PATH, allow_pickle=True)
+    mist = np.load(cache_path, allow_pickle=True)
     mist_smiles_to_idx = {str(s): i for i, s in enumerate(mist["smiles"])}
     mist_embeddings = np.asarray(mist["embeddings"])
     logger.info(
-        f"Loaded MIST embeddings: {mist_embeddings.shape}, "
+        f"Loaded MIST-{args.size} embeddings: {mist_embeddings.shape}, "
         f"{len(mist_smiles_to_idx)} unique SMILES"
     )
 
@@ -225,7 +266,7 @@ def main() -> None:
                             "endpoint": endpoint_name,
                             "fraction": float(frac),
                             "pct_label": f"{int(frac * 100)}%",
-                            "model": "MIST frozen",
+                            "model": model_label,
                             "replicate": int(rep),
                             "fold": int(fold),
                             "n_train": int(n_sub),
@@ -242,8 +283,8 @@ def main() -> None:
                         )
 
     df = pl.DataFrame(rows)
-    df.write_parquet(OUTPUT_PATH)
-    logger.info(f"Saved {df.height} rows to {OUTPUT_PATH}")
+    df.write_parquet(output_path)
+    logger.info(f"Saved {df.height} rows to {output_path}")
 
     # Brief summary
     summary = (

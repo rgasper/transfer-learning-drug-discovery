@@ -1,17 +1,18 @@
 """Run frozen MIST and frozen CheMeleon with 1-layer and 2-layer FFN heads.
 
 Companion to ``scripts/run-mist-data-efficiency.py``. Sweeps the same
-(endpoint, fraction, replicate, fold) grid for both encoders, with both
-shallow (Linear -> ReLU -> Linear) and deep (Linear -> ReLU -> Linear ->
-ReLU -> Linear) heads, on top of pre-cached pooled embeddings.
+(endpoint, fraction, replicate, fold) grid for all frozen encoders, with
+both shallow (Linear -> ReLU -> Linear) and deep (Linear -> ReLU ->
+Linear -> ReLU -> Linear) heads, on top of pre-cached pooled embeddings.
 
 Pre-requisites:
     uv run python scripts/run-mist-embed.py
+    uv run python scripts/run-mist-embed.py --size 1.8B
     uv run python scripts/run-chemeleon-embed.py
 
 Output: ``data/deep_head_efficiency_results.parquet`` with the same schema
-as the existing data-efficiency parquets, so the four new arms can be
-plotted alongside the original XGBoost/Chemprop baselines:
+as the existing data-efficiency parquets, so the new arms can be plotted
+alongside the original XGBoost/Chemprop baselines:
 
     pl.concat([
         pl.read_parquet("data/data_efficiency_results.parquet"),
@@ -21,6 +22,8 @@ plotted alongside the original XGBoost/Chemprop baselines:
 Model labels written to the parquet:
     - "MIST frozen 1-layer"
     - "MIST frozen 2-layer"
+    - "MIST-1.8B frozen 1-layer"
+    - "MIST-1.8B frozen 2-layer"
     - "CheMeleon frozen 1-layer"
     - "CheMeleon frozen 2-layer"
 
@@ -54,6 +57,7 @@ FRACTIONS = (0.01, 0.10, 0.25, 0.50, 0.75, 1.00)
 # (label, cache filename) for each frozen encoder we want to evaluate.
 ENCODERS = (
     ("MIST frozen", "mist_embeddings.npz"),
+    ("MIST-1.8B frozen", "mist_1.8b_embeddings.npz"),
     ("CheMeleon frozen", "chemeleon_embeddings.npz"),
 )
 
@@ -89,7 +93,8 @@ def load_encoder(label: str, cache_filename: str) -> EncoderArrays:
     if not path.exists():
         raise FileNotFoundError(
             f"Missing {label} embedding cache at {path}. "
-            "Run scripts/run-mist-embed.py and scripts/run-chemeleon-embed.py first."
+            "Run scripts/run-mist-embed.py [--size 1.8B] and "
+            "scripts/run-chemeleon-embed.py first."
         )
     data = np.load(path, allow_pickle=True)
     smiles_to_idx = {str(s): i for i, s in enumerate(data["smiles"])}
