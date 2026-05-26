@@ -84,8 +84,38 @@ def _(all_df, mo, pl):
 
 
 @app.cell
-def _(FIGURES_DIR, all_df, logger, mo, pairwise_tukeyhsd, pl, plt):
-    # --- Separate Tukey HSD plots for HLM and PAMPA (AUC-PR) ---
+def _(FIGURES_DIR, all_df, logger, mo, pairwise_tukeyhsd, pl, plt, sns):
+    # --- Combined boxplot + Tukey HSD per endpoint (HLM, PAMPA) ---
+    # Replaces the previous separate boxplots-{slug}-auc-pr.png and
+    # tukey-hsd-{slug}-auc-pr.png files with a single side-by-side figure
+    # that pairs the AUC-PR distributions with the statistical significance
+    # test relative to the best model. Random baseline preserved on the
+    # boxplot side. Saved to BOTH legacy filenames so README references stay
+    # valid.
+
+    _model_order_combined = [
+        "XGBoost scratch",
+        "XGBoost RLM-transfer",
+        "XGBoost RLM-feature-transfer",
+        "Chemprop scratch",
+        "Chemprop RLM-transfer",
+        "CheMeleon single-finetune",
+        "CheMeleon double-finetune",
+        "CheMeleon frozen single",
+        "CheMeleon frozen double",
+    ]
+    _palette_combined = {
+        "XGBoost scratch": "#FF5722",
+        "XGBoost RLM-transfer": "#FF9800",
+        "XGBoost RLM-feature-transfer": "#4CAF50",
+        "Chemprop scratch": "#2196F3",
+        "Chemprop RLM-transfer": "#03A9F4",
+        "CheMeleon single-finetune": "#66BB6A",
+        "CheMeleon double-finetune": "#8BC34A",
+        "CheMeleon frozen single": "#7E57C2",
+        "CheMeleon frozen double": "#B39DDB",
+    }
+    _baselines_combined = {"HLM Stability": 0.602, "PAMPA pH 7.4": 0.855}
 
     for _target in ["HLM Stability", "PAMPA pH 7.4"]:
         _subset = all_df.filter(pl.col("target") == _target)
@@ -93,7 +123,7 @@ def _(FIGURES_DIR, all_df, logger, mo, pairwise_tukeyhsd, pl, plt):
         _groups = _subset.get_column("model").to_list()
         _tukey = pairwise_tukeyhsd(_values, _groups, alpha=0.05)
 
-        # Find best model
+        # Find best model (highest mean AUC-PR) -> reference for Tukey HSD.
         _means = (
             _subset.group_by("model")
             .agg(pl.col("avg_precision").mean())
@@ -101,24 +131,73 @@ def _(FIGURES_DIR, all_df, logger, mo, pairwise_tukeyhsd, pl, plt):
         )
         _best_model = _means.get_column("model")[0]
 
-        _fig, _ax = plt.subplots(figsize=(10, 7))
-        _tukey.plot_simultaneous(comparison_name=_best_model, ax=_ax, xlabel="AUC-PR")
-        _ax.set_title(
-            f"{_target}: Tukey HSD (FWER = 0.05)\n(reference: {_best_model})",
-            fontsize=13,
+        # Combined figure: horizontal boxplot (left) + Tukey HSD (right).
+        # Horizontal orientation aligns model names with the Tukey HSD plot
+        # and avoids cramped 45-degree x-axis labels.
+        _fig, (_ax_box, _ax_tukey) = plt.subplots(
+            1, 2, figsize=(16, 7), sharey=False
+        )
+
+        # Boxplot panel (horizontal: model on Y, AUC-PR on X). Reverse the
+        # order so XGBoost scratch sits on top, matching the natural reading
+        # order of the model_order list.
+        _df_pd = _subset.to_pandas()
+        sns.boxplot(
+            data=_df_pd,
+            y="model",
+            x="avg_precision",
+            hue="model",
+            ax=_ax_box,
+            order=list(reversed(_model_order_combined)),
+            palette=_palette_combined,
+            legend=False,
+        )
+        _ax_box.axvline(
+            _baselines_combined[_target],
+            color="black",
+            linestyle="--",
+            linewidth=1.2,
+            alpha=0.6,
+            label=f"Random baseline ({_baselines_combined[_target]:.3f})",
+        )
+        _ax_box.legend(fontsize=9, loc="lower right")
+        _ax_box.set_title("AUC-PR Distribution (25 folds)")
+        _ax_box.set_xlabel("AUC-PR")
+        _ax_box.set_ylabel("")
+
+        # Tukey HSD panel.
+        _tukey.plot_simultaneous(
+            comparison_name=_best_model, ax=_ax_tukey, xlabel="AUC-PR"
+        )
+        _ax_tukey.set_title(
+            f"Tukey HSD (FWER = 0.05)\n(reference: {_best_model})"
+        )
+
+        _fig.suptitle(
+            f"{_target}: Model Comparison",
+            fontsize=14,
+            fontweight="bold",
         )
         plt.tight_layout()
 
+        # Save under both legacy filenames so existing README references
+        # continue to resolve.
         _slug = "hlm" if "HLM" in _target else "pampa"
-        _path = FIGURES_DIR / f"tukey-hsd-{_slug}-auc-pr.png"
-        _fig.savefig(_path, dpi=150, bbox_inches="tight", facecolor="white")
-        logger.info(f"Saved {_path}")
+        for _name in (
+            f"tukey-hsd-{_slug}-auc-pr.png",
+            f"boxplots-{_slug}-auc-pr.png",
+        ):
+            _path = FIGURES_DIR / _name
+            _fig.savefig(_path, dpi=150, bbox_inches="tight", facecolor="white")
+            logger.info(f"Saved {_path}")
         plt.close(_fig)
 
     mo.md(
-        "Saved separate Tukey HSD plots (AUC-PR) for HLM and PAMPA to "
-        "`docs/figures/tukey-hsd-hlm-auc-pr.png` and "
-        "`docs/figures/tukey-hsd-pampa-auc-pr.png`."
+        "Saved combined boxplot + Tukey HSD plots (AUC-PR) for HLM and PAMPA. "
+        "Each endpoint's figure is written to both "
+        "`docs/figures/tukey-hsd-{slug}-auc-pr.png` and "
+        "`docs/figures/boxplots-{slug}-auc-pr.png` so the existing README "
+        "image references continue to work."
     )
     return
 
@@ -189,39 +268,9 @@ def _(FIGURES_DIR, all_df, logger, mo, pl, plt, sns):
     )
     logger.info(f"Saved {FIGURES_DIR / 'all-models-boxplots.png'}")
 
-    # --- Separate per-endpoint boxplots ---
-    for _target in ["HLM Stability", "PAMPA pH 7.4"]:
-        _slug = "hlm" if "HLM" in _target else "pampa"
-        _fig_single, _ax_single = plt.subplots(figsize=(12, 6))
-        _subset = all_df.filter(pl.col("target") == _target).to_pandas()
-        sns.boxplot(
-            data=_subset,
-            x="model",
-            y="avg_precision",
-            hue="model",
-            ax=_ax_single,
-            order=_model_order,
-            palette=_palette,
-            legend=False,
-        )
-        _ax_single.axhline(
-            _baselines[_target],
-            color="black",
-            linestyle="--",
-            linewidth=1.2,
-            alpha=0.6,
-            label=f"Random baseline ({_baselines[_target]:.3f})",
-        )
-        _ax_single.legend(fontsize=9, loc="lower right")
-        _ax_single.set_title(f"{_target}: AUC-PR Distributions (25 folds)", fontsize=13)
-        _ax_single.set_xlabel("")
-        _ax_single.set_ylabel("AUC-PR")
-        _ax_single.tick_params(axis="x", rotation=45)
-        _fig_single.tight_layout()
-        _path = FIGURES_DIR / f"boxplots-{_slug}-auc-pr.png"
-        _fig_single.savefig(_path, dpi=150, bbox_inches="tight", facecolor="white")
-        logger.info(f"Saved {_path}")
-        plt.close(_fig_single)
+    # Per-endpoint boxplots are now produced by the combined boxplot+Tukey
+    # cell above (saved to boxplots-{slug}-auc-pr.png AND
+    # tukey-hsd-{slug}-auc-pr.png).
 
     mo.vstack(
         [
